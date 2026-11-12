@@ -1,0 +1,85 @@
+{
+  "claude_binary": "claude",
+  "available_models": [
+    "haiku",
+    "sonnet",
+    "opus",
+    "fable"
+  ],
+  "permission_modes": [
+    "acceptEdits",
+    "auto",
+    "dontAsk",
+    "bypassPermissions"
+  ],
+  "default_protected_paths": [
+    ".env*",
+    "**/*.key",
+    "**/*.pem",
+    "**/secrets/**"
+  ],
+  "toolkit": {
+    "path": "~/Projects/nexttech-toolkit",
+    "marketplace": "nexttech-toolkit",
+    "github_repo": "OWNER/nexttech-toolkit",
+    "always_plugins": [
+      "core"
+    ],
+    "always_external_plugins": [
+      "ponytail@ponytail"
+    ]
+  },
+  "external_marketplaces": {
+    "ponytail": "DietrichGebert/ponytail",
+    "claude-plugins-official": "anthropics/claude-plugins-official"
+  },
+  "stacks": {
+    "python": {
+      "markers": [
+        "pyproject.toml",
+        "requirements.txt",
+        "setup.py"
+      ],
+      "toolkit_plugins": [
+        "python"
+      ],
+      "pinned_skills": [],
+      "external_plugins": [
+        "pyright-lsp@claude-plugins-official"
+      ],
+      "commands": {
+        "lint": "uv run ruff check .",
+        "test": "uv run pytest"
+      }
+    }
+  },
+  "defaults": {
+    "models": {
+      "planner": "opus",
+      "worker": "sonnet",
+      "reviewer": "opus",
+      "onboarder": "sonnet"
+    },
+    "limits": {
+      "max_review_rounds": 1,
+      "max_fix_rounds": 1,
+      "max_conflict_rounds": 1,
+      "max_question_rounds": 1,
+      "escalate_file_threshold": 5,
+      "summary_max_lines": 15,
+      "max_diff_chars": 60000,
+      "max_check_output_chars": 4000,
+      "max_turns": {
+        "planner": 40,
+        "worker": 40,
+        "reviewer": 30,
+        "onboarder": 60
+      }
+    },
+    "worker_permission_mode": "acceptEdits",
+    "reviewers": [
+      "reviewer"
+    ]
+  },
+  "projects": []
+}

@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+backend/.venv/
+friday/.build/
+friday/FRIDAY.app/
+.idea/
+.DS_Store

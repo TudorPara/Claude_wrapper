@@ -1,0 +1,29 @@
+[project]
+name = "cw"
+version = "0.1.0"
+description = "Terminal orchestrator for Claude Code: tickets, planner/worker/reviewer agents, worktrees and pull requests across projects."
+requires-python = ">=3.13"
+dependencies = [
+    "pydantic>=2.13",
+    "pydantic-settings>=2.15",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+cw = "cw.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "ruff>=0.16",
+]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

@@ -1,0 +1,22 @@
+{
+  "name": "nexttech-toolkit",
+  "owner": {
+    "name": "Nexttech"
+  },
+  "metadata": {
+    "description": "Shared agents, skills, rules and hooks for every Nexttech project.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "core",
+      "source": "./plugins/core",
+      "description": "Stack-independent pieces: planner, worker, reviewer and onboarder agents, clean-code and rule-precedence skills, the bootstrap-project command and the guard hook."
+    },
+    {
+      "name": "python",
+      "source": "./plugins/python",
+      "description": "Python stack: the team's python-rules skill and a ruff format/check hook after every edit."
+    }
+  ]
+}
