@@ -13,7 +13,6 @@
     "bypassPermissions"
   ],
   "default_protected_paths": [
-    ".env*",
     "**/*.key",
     "**/*.pem",
     "**/secrets/**"
@@ -65,10 +64,13 @@
       "max_fix_rounds": 1,
       "max_conflict_rounds": 1,
       "max_question_rounds": 1,
+      "max_workers": 4,
       "escalate_file_threshold": 5,
       "summary_max_lines": 15,
       "max_diff_chars": 60000,
       "max_check_output_chars": 4000,
+      "agent_timeout_minutes": 45,
+      "check_timeout_minutes": 15,
       "max_turns": {
         "planner": 40,
         "worker": 40,

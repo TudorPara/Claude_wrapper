@@ -13,6 +13,7 @@ class AppErrorCode(Enum):
     TICKET_BUSY = ("ticket_busy", "Another cw process is already working on this ticket.")
     GIT_FAILED = ("git_failed", "A git command failed.")
     COMMAND_FAILED = ("command_failed", "A project command failed.")
+    TIMED_OUT = ("timed_out", "A command or agent run took longer than its time limit.")
     AGENT_FAILED = ("agent_failed", "A Claude Code agent run failed.")
     USAGE_LIMIT = ("usage_limit", "The Claude usage limit was reached; resume the ticket later.")
     CHECKS_FAILED = ("checks_failed", "Lint or tests still fail after the allowed fix rounds.")
@@ -28,7 +29,8 @@ class AppErrorCode(Enum):
 class AppException(Exception):
     """Raised for every business-rule, configuration or integration failure."""
 
-    def __init__(self, error_code: AppErrorCode, detail: str = "") -> None:
+    def __init__(self, error_code: AppErrorCode, detail: str = "", usage: object | None = None) -> None:
         self.error_code = error_code
         self.detail = detail
+        self.usage = usage
         super().__init__(f"{error_code.message} {detail}".strip())

@@ -64,6 +64,9 @@ struct Limits: Codable, Equatable {
     var maxDiffChars: Int
     var maxCheckOutputChars: Int
     var maxTurns: RoleTurns
+    var agentTimeoutMinutes: Int?
+    var checkTimeoutMinutes: Int?
+    var maxWorkers: Int?
 
     enum CodingKeys: String, CodingKey {
         case maxReviewRounds = "max_review_rounds"
@@ -75,6 +78,9 @@ struct Limits: Codable, Equatable {
         case maxDiffChars = "max_diff_chars"
         case maxCheckOutputChars = "max_check_output_chars"
         case maxTurns = "max_turns"
+        case agentTimeoutMinutes = "agent_timeout_minutes"
+        case checkTimeoutMinutes = "check_timeout_minutes"
+        case maxWorkers = "max_workers"
     }
 }
 
@@ -237,11 +243,18 @@ struct TicketSummary: Codable, Identifiable, Hashable {
     }
 }
 
+struct ContextAnchor: Codable, Hashable {
+    var path: String
+    var lines: String?
+    var reason: String?
+}
+
 struct PromptEntry: Codable, Hashable { var at: String; var text: String }
 
 struct Subtask: Codable, Hashable {
     var id: String
     var title: String
+    var worker: String?
     var instructions: String
     var files: [String]
 }
@@ -251,6 +264,9 @@ struct WorkEntry: Codable, Hashable {
     var subtask: String?
     var status: String
     var summary: String
+    var worker: String?
+    var files: [String]?
+    var handoff: String?
 }
 
 struct ReviewComment: Codable, Hashable {
@@ -310,6 +326,7 @@ struct Ticket: Codable, Identifiable {
     var plan: String
     var optionsConsidered: String
     var subtasks: [Subtask]
+    var contextPack: [ContextAnchor]?
     var workLog: [WorkEntry]
     var reviews: [ReviewEntry]
     var prUrl: String?
@@ -323,6 +340,7 @@ struct Ticket: Codable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, project, title, status, route, branch, owner, prompts, questions, plan, subtasks, reviews,
             error, runs, archived
+        case contextPack = "context_pack"
         case baseBranch = "base_branch"
         case previousBranch = "previous_branch"
         case tasksDone = "tasks_done"

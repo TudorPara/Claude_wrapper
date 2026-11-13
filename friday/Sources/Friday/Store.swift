@@ -56,6 +56,7 @@ final class Store {
     var usage: [UsageRow] = []
     var jobs: [Job] = []
     var lastError: String?
+    let voice = Voice()
 
     var rail: Rail = .projects
     var topTab: TopTab = .dashboard
@@ -200,6 +201,7 @@ final class Store {
                         job.running = false
                         job.exitCode = code
                         await self.refreshAll()
+                        self.announce(job)
                     }
                 })
         } catch {
@@ -211,5 +213,15 @@ final class Store {
 
     func stop(_ job: Job) {
         job.process?.terminate()
+    }
+
+    /// Says where the job's ticket stands when a step ends, if "Speak replies" is on.
+    private func announce(_ job: Job) {
+        guard UserDefaults.standard.bool(forKey: Preference.speakReplies) else { return }
+        if let id = job.ticketId, let summary = tickets.first(where: { $0.id == id }) {
+            voice.speak("\(summary.title). \(summary.status.label).")
+        } else {
+            voice.speak(job.exitCode == 0 ? "\(job.title) finished." : "\(job.title) failed.")
+        }
     }
 }

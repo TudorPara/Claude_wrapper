@@ -1,7 +1,31 @@
 import SwiftUI
 
+/// Per-Mac preferences for the chat, the voice and the look. They live in UserDefaults, not in cw's config.
+enum Preference {
+    static let chatTextSize = "chatTextSize"
+    static let liveOutputLines = "liveOutputLines"
+    static let planFirstByDefault = "planFirstByDefault"
+    static let speakReplies = "speakReplies"
+    static let voiceLanguage = "voiceLanguage"
+    static let accent = "accent"
+
+    static let defaultChatTextSize = 13.0
+    static let defaultLiveOutputLines = 4
+    static let defaultVoiceLanguage = "en-US"
+    static let defaultAccent = "cyan"
+}
+
 enum Theme {
-    static let accent = Color(red: 0.25, green: 0.78, blue: 0.95)
+    static let accents: [String: Color] = [
+        "cyan": Color(red: 0.25, green: 0.78, blue: 0.95),
+        "green": Color(red: 0.35, green: 0.84, blue: 0.52),
+        "orange": Color(red: 0.98, green: 0.62, blue: 0.20),
+        "purple": Color(red: 0.70, green: 0.55, blue: 0.98),
+    ]
+    static var accent: Color {
+        let chosen = UserDefaults.standard.string(forKey: Preference.accent) ?? Preference.defaultAccent
+        return accents[chosen] ?? Color(red: 0.25, green: 0.78, blue: 0.95)
+    }
     static let background = Color(red: 0.04, green: 0.05, blue: 0.07)
     static let panel = Color(red: 0.07, green: 0.08, blue: 0.11)
     static let editor = Color(red: 0.09, green: 0.10, blue: 0.13)

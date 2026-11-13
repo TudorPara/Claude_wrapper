@@ -6,6 +6,10 @@ struct ChatPanel: View {
     @State private var ticket: Ticket?
     @State private var prompt = ""
     @State private var planFirst = false
+    @State private var dictationStart = ""
+    @AppStorage(Preference.chatTextSize) private var textSize = Preference.defaultChatTextSize
+    @AppStorage(Preference.liveOutputLines) private var liveLines = Preference.defaultLiveOutputLines
+    @AppStorage(Preference.planFirstByDefault) private var planFirstByDefault = false
 
     private var projectName: String? { store.selectedProject ?? store.config?.projects.first?.name }
     private var summary: TicketSummary? { store.tickets.first { $0.id == store.selectedTicket } }
@@ -39,6 +43,8 @@ struct ChatPanel: View {
             composer
         }
         .background(Theme.panel)
+        .onAppear { planFirst = planFirstByDefault }
+        .onChange(of: store.voice.transcript) { prompt = dictationStart + store.voice.transcript }
         .task(id: "\(store.selectedTicket ?? "")|\(summary?.updatedAt ?? "")") {
             ticket = store.selectedTicket == nil ? nil : await store.ticket(store.selectedTicket!)
         }
@@ -85,14 +91,15 @@ struct ChatPanel: View {
         var result: [Message] = ticket.prompts.map { Message(kind: .user, text: $0.text, at: $0.at) }
         let planAt = ticket.runs.last { $0.role == "planner" }?.at ?? ticket.prompts.first?.at ?? ""
         if !ticket.questions.isEmpty {
-            result.append(Message(kind: .friday, text: "Before I plan, I need:\n" + ticket.questions.map { "• \($0)" }.joined(separator: "\n"), at: planAt))
+            result.append(Message(kind: .friday, text: "I need your answer:\n" + ticket.questions.map { "• \($0)" }.joined(separator: "\n"), at: ticket.runs.last?.at ?? planAt))
         }
         if !ticket.plan.isEmpty {
-            let subtasks = ticket.subtasks.map { "\((ticket.tasksDone ?? []).contains($0.id) ? "✓" : "○") \($0.id) · \($0.title)" }.joined(separator: "\n")
+            let subtasks = ticket.subtasks.map { "\((ticket.tasksDone ?? []).contains($0.id) ? "✓" : "○") \($0.id) · \($0.title) (\($0.worker ?? "W1"))" }.joined(separator: "\n")
             result.append(Message(kind: .friday, text: "Plan:\n\(ticket.plan)\n\n\(subtasks)", at: planAt))
         }
         for work in ticket.workLog {
-            result.append(Message(kind: .friday, text: "\(work.subtask.map { "[\($0)] " } ?? "")\(work.summary)", at: work.at))
+            let files = (work.files ?? []).isEmpty ? "" : "\nFiles: " + (work.files ?? []).joined(separator: ", ")
+            result.append(Message(kind: .friday, text: "\(work.subtask.map { "[\($0)] " } ?? "")\(work.summary)\(files)", at: work.at))
         }
         for review in ticket.reviews {
             let comments = review.comments.map { "• \($0.path):\($0.line) (\($0.severity)) \($0.body)" }.joined(separator: "\n")
@@ -108,18 +115,18 @@ struct ChatPanel: View {
         case .user:
             HStack {
                 Spacer(minLength: 40)
-                Text(message.text).textSelection(.enabled)
+                Text(message.text).font(.system(size: textSize)).textSelection(.enabled)
                     .padding(10)
                     .background(Theme.accent.opacity(0.22), in: RoundedRectangle(cornerRadius: 10))
             }
         case .friday:
-            Text(message.text).textSelection(.enabled)
+            Text(message.text).font(.system(size: textSize)).textSelection(.enabled)
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
         case .pipeline:
             VStack(alignment: .leading, spacing: 6) {
-                Text(message.text).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                Text(message.text).font(.system(size: textSize - 1)).foregroundStyle(.secondary).textSelection(.enabled)
                 if !message.actions.isEmpty, let ticket {
                     HStack {
                         ForEach(message.actions, id: \.0) { action in
@@ -139,7 +146,7 @@ struct ChatPanel: View {
     private func pipelineBubble(_ job: Job) -> some View {
         HStack(alignment: .top, spacing: 8) {
             ProgressView().controlSize(.small)
-            Text(job.log.split(separator: "\n").suffix(4).joined(separator: "\n"))
+            Text(job.log.split(separator: "\n").suffix(liveLines).joined(separator: "\n"))
                 .font(.caption.monospaced())
                 .foregroundStyle(.secondary)
         }
@@ -162,7 +169,17 @@ struct ChatPanel: View {
                 .padding(10)
                 .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
                 .onSubmit(send)
+            if let problem = store.voice.problem {
+                Text(problem).font(.caption).foregroundStyle(.orange)
+            }
             HStack {
+                Button(action: dictate) {
+                    Image(systemName: store.voice.listening ? "mic.fill" : "mic")
+                        .foregroundStyle(store.voice.listening ? Color.red : Color.secondary)
+                }
+                .buttonStyle(.borderless)
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .help(store.voice.listening ? "Stop dictating (⇧⌘D)" : "Dictate into the box (⇧⌘D), then press Return to send")
                 if !replying {
                     Toggle("Plan first", isOn: $planFirst).toggleStyle(.switch).controlSize(.mini)
                         .help("Off: a worker starts right away (best for small tasks). On: the planner writes a plan you approve first.")
@@ -178,9 +195,18 @@ struct ChatPanel: View {
         .padding(10)
     }
 
+    /// Starts or stops dictation; what you say is added after the text already in the box.
+    private func dictate() {
+        if !store.voice.listening {
+            dictationStart = prompt.isEmpty || prompt.hasSuffix(" ") ? prompt : prompt + " "
+        }
+        store.voice.toggle()
+    }
+
     private func send() {
         let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, let projectName else { return }
+        store.voice.cancel()
         if replying, let summary {
             store.run("Follow-up · \(summary.title.prefix(40))", project: summary.project, ticketId: summary.id, ["run", summary.id, text])
         } else {

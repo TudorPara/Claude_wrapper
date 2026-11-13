@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 
 from cw.config import ProjectCommands
 
+FIRST_WORKER = "W1"
+
 
 def utc_now() -> datetime:
     """Return the current time in UTC."""
@@ -40,6 +42,7 @@ class Step(StrEnum):
 
     PLAN = "plan"
     WORK = "work"
+    REVIEW = "review"
     PR = "pr"
 
 
@@ -47,6 +50,7 @@ class WorkerStatus(StrEnum):
     """How a worker run ended."""
 
     DONE = "done"
+    QUESTION = "question"
     NEEDS_PLAN = "needs_plan"
     BLOCKED = "blocked"
 
@@ -70,6 +74,9 @@ class Subtask(BaseModel):
 
     id: str = Field(description="Short id such as S1.")
     title: str
+    worker: str = Field(
+        default=FIRST_WORKER, description="The worker that does it: W1, W2, ... Related tasks share a worker."
+    )
     instructions: str
     files: list[str] = Field(description="Files this task is expected to change.")
 
@@ -81,6 +88,14 @@ class ReviewComment(BaseModel):
     line: int = Field(description="Line number in the new version of the file.")
     severity: Severity
     body: str
+
+
+class ContextAnchor(BaseModel):
+    """A precise code location the worker must inspect first."""
+
+    path: str = Field(description="Relative file path.")
+    lines: str = Field(default="", description="Line range, e.g. '45-60' or '120'.")
+    reason: str = Field(default="", description="Why this code matters for the task.")
 
 
 class PlannerResult(BaseModel):
@@ -95,13 +110,27 @@ class PlannerResult(BaseModel):
     options_considered: str
     subtasks: list[Subtask]
     files: list[str]
+    answers: list[str] = Field(
+        description="Only when a worker asked you questions: one answer per question, in the same order, with an "
+        "empty string where only the user can answer. Otherwise empty."
+    )
+    context_pack: list[ContextAnchor] = Field(
+        default_factory=list,
+        description="5–15 key locations the worker must inspect to implement this plan.",
+    )
 
 
 class WorkerResult(BaseModel):
     """What a worker returns."""
 
     status: WorkerStatus
-    summary: str
+    summary: str = Field(description="How you solved it, in a few lines.")
+    files: list[str] = Field(description="Every file you created or changed.")
+    handoff: str = Field(
+        description="What the next worker must know to build on this: names, signatures, decisions, "
+        "anything left open. Empty when there is nothing."
+    )
+    questions: list[str] = Field(description="Only with status question: what you need answered. Otherwise empty.")
     commit_message: str
     reason: str
 
@@ -140,15 +169,31 @@ class PromptEntry(BaseModel):
 
     at: datetime
     text: str
+    is_answer: bool = False
+
+
+class QuestionEntry(BaseModel):
+    """A question a worker asked, and the answer the planner or the user gave."""
+
+    at: datetime
+    worker: str
+    task: str | None
+    question: str
+    answer: str = ""
+    answered_by: str = ""
+    delivered: bool = False
 
 
 class WorkEntry(BaseModel):
-    """A worker pass recorded in the ticket."""
+    """A worker pass recorded in the ticket: what it did, which files it touched, what the next worker must know."""
 
     at: datetime
     subtask: str | None
     status: WorkerStatus
     summary: str
+    worker: str = ""
+    files: list[str] = []
+    handoff: str = ""
 
 
 class ReviewEntry(BaseModel):
@@ -189,6 +234,7 @@ class Ticket(BaseModel):
     route: Route
     branch: str
     base_branch: str
+    target_branch: str = ""
     previous_branch: str
     base_sha: str
     owner: str
@@ -199,16 +245,25 @@ class Ticket(BaseModel):
     questions: list[str] = []
     split: list[str] = []
     question_rounds: int = 0
+    qa: list[QuestionEntry] = []
+    asking_worker: str = ""
     planner_session: str | None = None
+    worker_sessions: dict[str, str] = {}
+    worker_seen: dict[str, int] = {}
+    last_worker: str = ""
     plan: str = ""
     options_considered: str = ""
     subtasks: list[Subtask] = []
     tasks_done: list[str] = []
     files: list[str] = []
+    context_pack: list[ContextAnchor] = []
     work_log: list[WorkEntry] = []
     reviews: list[ReviewEntry] = []
     last_reviewed_tree: str | None = None
     baseline: dict[str, bool] = {}
+    failing_checks: list[str] = []
+    new_project: bool = False
+    posted_review_round: int = 0
     warnings: list[str] = []
     commit_message: str = ""
     pushed_at: datetime | None = None

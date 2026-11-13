@@ -4,10 +4,18 @@ The team's Claude Code plugin marketplace. Every project enables it, so everyone
 
 | Plugin | Contents |
 |---|---|
-| `core` | agents `planner`, `worker`, `reviewer`, `onboarder`; skills `clean-code` (MIT, from sickn33/agentic-awesome-skills), `rule-precedence`; command `/core:bootstrap-project`; `guard.py` PreToolUse hook |
-| `python` | skill `python-rules`; `ruff_on_edit.py` PostToolUse hook |
+| `core` | agents `planner`, `worker`, `reviewer`, `onboarder`; skills `engineering` (the team's rules for any language), `pr-review` (how the reviewer applies them), `rule-precedence`, `clean-code` (MIT, from sickn33/agentic-awesome-skills); command `/core:bootstrap-project`; `guard.py` PreToolUse hook |
+| `python` | skill `python-rules` (a short core plus `topics/`); `rules_on_touch.py` hook, which shows a topic the first time a file it covers is read or edited; `ruff_on_edit.py` PostToolUse hook |
 
-Install by hand (cw's `project add` writes this into each project's `.claude/settings.json` for you):
+## How the rules reach an agent
+
+1. **Pinned.** A skill whose front matter says `pin: true` is put in full into every cw agent run for projects that load its plugin, and so is every skill an agent file lists under `skills:` (that is how the reviewer gets `pr-review`). Keep pinned skills short: `engineering` and the core of `python-rules`.
+2. **By topic.** `python-rules/topics/topics.json` maps file names and folders to topic files. The hook shows a topic once per session, when the agent first touches a matching file. The same file lists, under `new_project`, the topics every agent gets while a project has no code yet, and under `review`, the topics the reviewer always gets on top of those that cover the changed files.
+3. **Mechanically.** Hooks enforce what a script can check: the guard blocks dangerous shell commands, ruff formats and lints edited files that were clean before.
+
+## Install by hand
+
+`cw project wire <name>` writes this into a project's `.claude/settings.json` for you.
 
 ```
 /plugin marketplace add your-org/nexttech-toolkit
@@ -15,4 +23,8 @@ Install by hand (cw's `project add` writes this into each project's `.claude/set
 /plugin install python@nexttech-toolkit
 ```
 
-Add a stack: create `plugins/<stack>/` with its rules skill and hooks, list it in `.claude-plugin/marketplace.json`, then add the stack to `stacks` in `~/.cw/config.json`. Bump `metadata.version` on every change and check with `claude plugin validate .`.
+## Change it
+
+- **A rule:** edit the skill or the topic file. To add a topic, add `topics/<name>.md` and its patterns to `topics.json` (`folder/` matches a folder on the path, anything else is a file-name glob).
+- **A stack:** create `plugins/<stack>/` with its rules skill and hooks, list it in `.claude-plugin/marketplace.json`, then add the stack to `stacks` in `~/.cw/config.json`.
+- Bump the versions on every change and check with `claude plugin validate .`.

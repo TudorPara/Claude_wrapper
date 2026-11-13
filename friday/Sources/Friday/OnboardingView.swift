@@ -58,7 +58,7 @@ struct OnboardingView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Optional. Mapping runs the onboarder agent once (it costs tokens): it reads the repository without changing it, works out the setup, lint and test commands, and lists where the code differs from the team rules. Useful for an unfamiliar repository without a CLAUDE.md, or before migrating a project to the team rules. Your decisions are stored in cw's own folder, never in the repository, and every agent reads them.")
+                Text("Optional. Mapping runs the onboarder agent once (it costs tokens): it reads the repository without changing it, works out the lint and test commands, and lists where the code differs from the team rules. Useful for an unfamiliar repository without a CLAUDE.md, or before migrating a project to the team rules. Your decisions are stored in cw's own folder, never in the repository, and every agent reads them.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 HStack {

@@ -1,14 +1,14 @@
 # cw + FRIDAY
 
-A small team workflow around Claude Code. One shared **toolkit** (agents, skills, rules, hooks), one terminal orchestrator (**cw**) that runs those agents on tickets across all your projects, and one macOS app (**FRIDAY**) that shows and drives the same thing.
+A small team workflow around Claude Code. One shared **toolkit** (agents, skills, rules, hooks), one terminal orchestrator (**cw**) that runs those agents on tickets across all your projects, and one macOS app (**FRIDAY**) that shows and drives the same thing, by chat or by voice.
 
 ```
 toolkit/   Claude Code plugin marketplace: the team's agents, skills, hooks  → push to GitHub
-backend/   cw, the Python CLI: tickets, one branch per ticket, planner → tasks one at a time → checks → reviewer → one-commit PR
+backend/   cw, the Python CLI: tickets, one branch per ticket, planner → workers taking turns → checks → reviewer → one commit → PR
 friday/    FRIDAY, the SwiftUI macOS app: a window over cw
 ```
 
-First time? Follow [FIRST_RUN.md](FIRST_RUN.md). How it works and why: [EXPLANATION.md](EXPLANATION.md). What changed after real use: [CHANGES_AND_ISSUES.md](CHANGES_AND_ISSUES.md).
+First time? Follow [FIRST_RUN.md](FIRST_RUN.md). How it works and why: [EXPLANATION.md](EXPLANATION.md). What changed after real use: [CHANGES_AND_ISSUES.md](CHANGES_AND_ISSUES.md). Working on this repository with Claude Code: [CLAUDE.md](CLAUDE.md).
 
 ## Requirements
 
@@ -19,39 +19,33 @@ First time? Follow [FIRST_RUN.md](FIRST_RUN.md). How it works and why: [EXPLANAT
 
 ## Setup
 
-1. **Publish the toolkit.** Push `toolkit/` as its own GitHub repository (for example `your-org/nexttech-toolkit`) and keep a local clone.
-
-2. **Install cw.**
+1. **Install cw.** Run this again after every change to `backend/`.
 
    ```bash
-   uv tool install ./backend
+   uv tool install --force ./backend
    ```
 
-3. **Write your config** (`~/.cw/config.json`):
+2. **Write your config** (`~/.cw/config.json`). The toolkit can stay in this repository until you publish it.
 
    ```bash
-   cw init --toolkit ~/Projects/nexttech-toolkit --github-repo your-org/nexttech-toolkit
+   cw init --toolkit ./toolkit --github-repo your-org/nexttech-toolkit
    ```
 
-4. **Check your setup.** `cw doctor` lists anything missing, including the external plugins (ponytail, pyright-lsp) with the exact install command.
+3. **Check your setup.** `cw doctor` lists anything missing, with the command that fixes it.
 
-   ```bash
-   cw doctor
-   ```
-
-5. **Bitbucket only:** export your Atlassian email and API token (never stored in the config).
+4. **Bitbucket only:** export your Atlassian email and API token (never stored in the config).
 
    ```bash
    export BITBUCKET__EMAIL=you@company.com BITBUCKET__API_TOKEN=...
    ```
 
-6. **Add a project.** This registers it, detects the stack and code host, and takes the stack's setup/lint/test commands from the config. No agent runs and nothing is written into the repository. `--onboard` (or **Map this project** in FRIDAY) optionally runs the onboarder agent.
+5. **Add a project you already have**, or let cw create one from an idea (see below).
 
    ```bash
    cw project add ~/code/my-service
    ```
 
-7. **Build FRIDAY** (optional). On first launch without a config, it shows a Setup screen that does steps 2, 3 and 6 for you:
+6. **Build FRIDAY** (optional).
 
    ```bash
    ./friday/build-app.sh && open friday/FRIDAY.app
@@ -61,18 +55,21 @@ First time? Follow [FIRST_RUN.md](FIRST_RUN.md). How it works and why: [EXPLANAT
 
 | You want to | Terminal | FRIDAY |
 |---|---|---|
-| Do a small task | `cw run my-service "make the save button blue"` | type it in the chat on the right |
+| Build a project from nothing | `cw new reminders "Remind me when the car insurance expires"` | terminal only |
+| Do a small task | `cw run my-service "make the save button blue"` | type or dictate it in the chat |
 | Plan a bigger one first | `cw run my-service --plan "add CSV export"` | turn on **Plan first** |
-| Answer questions or follow up | `cw run <ticket> "use semicolons"` | select the ticket, reply in the chat |
-| Approve a plan | `cw approve <ticket>` | **Approve plan** (tasks then run one at a time) |
-| Finish into a reviewed PR | `cw pr <ticket>` | **Review & open PR** |
-| Resume after the usage limit | `cw resume <ticket>` | **Resume** |
+| Start from another branch | `cw run my-service --base develop "..."` | terminal only |
+| Answer a question, or follow up | `cw run <ticket> "use semicolons"` | select the ticket, reply in the chat |
+| Approve a plan | `cw approve <ticket>` | **Approve plan** |
+| Have it reviewed, nothing committed | `cw review <ticket>` | **Review only** |
+| Review it and open the PR | `cw pr <ticket>` | **Review & open PR** |
+| Continue after a stop, an error or the usage limit | `cw resume <ticket>` | **Resume** |
 | Clean up after merge | `cw done <ticket>` (`--abandon` to drop it) | **Mark done** / **More** |
-| See the code | `cw project list` | Projects panel + file tree (the agent works on a branch in your checkout) |
 | Pause a ticket to start another | `cw park <ticket>` | **More → Park** |
-| See everything | `cw status`, `cw show <ticket>`, `cw stats`, `cw toolkit` | Overview, Usage, Toolkit |
+| Read a ticket | `cw show <ticket>`, or open `~/.cw/tickets/<project>/<ticket>.md` | select it |
+| See everything | `cw status`, `cw stats`, `cw toolkit`, `cw project list` | Overview, Usage, Toolkit |
 
-Every view has a `--json` form; FRIDAY uses exactly those.
+Every view has a `--json` form; FRIDAY uses exactly those. While a command runs, cw prints each tool call the agent makes, so you can follow it live.
 
 ## Develop
 

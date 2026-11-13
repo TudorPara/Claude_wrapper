@@ -10,12 +10,14 @@ from pathlib import Path
 
 from cw.config import cw_home
 from cw.errors import AppErrorCode, AppException
-from cw.models import Ticket, TicketStatus, TicketSummary, utc_now
+from cw.models import Ticket, TicketStatus, TicketSummary, WorkEntry, WorkerStatus, utc_now
 
 logger = logging.getLogger(__name__)
 
 TICKETS_DIR = "tickets"
 TICKET_SUFFIX = ".json"
+TEMPORARY_SUFFIX = ".tmp"
+MARKDOWN_SUFFIX = ".md"
 LOCK_FILE_NAME = ".lock"
 LOCK_SEPARATOR = " "
 ID_DATE_FORMAT = "%y%m%d"
@@ -62,11 +64,14 @@ def read_ticket(path: Path) -> Ticket:
 
 
 def save_ticket(ticket: Ticket) -> None:
-    """Write the ticket."""
+    """Write the ticket (through a temporary file, so a reader never sees half of it) and its readable .md twin."""
     ticket.updated_at = utc_now()
     path = ticket_path(ticket.project, ticket.id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(ticket.model_dump_json(indent=2))
+    temporary = path.with_suffix(TEMPORARY_SUFFIX)
+    temporary.write_text(ticket.model_dump_json(indent=2))
+    temporary.replace(path)
+    path.with_suffix(MARKDOWN_SUFFIX).write_text(ticket_markdown(ticket))
 
 
 def ticket_paths() -> list[Path]:
@@ -105,27 +110,79 @@ def list_tickets() -> list[TicketSummary]:
     return sorted(summaries, key=lambda summary: summary.updated_at, reverse=True)
 
 
-def render_ticket(ticket: Ticket) -> str:
-    """Return a readable text view of a ticket for the terminal."""
-    lines = [
-        f"# {ticket.title}",
-        f"{ticket.id} · {ticket.project} · {ticket.status} · {ticket.route} · {ticket.branch}",
+def work_record(entry: WorkEntry, include_handoff: bool = True) -> list[str]:
+    """Return what a worker left behind: how it solved its job, the files it touched, what the next one must know."""
+    label = "Solved" if entry.status == WorkerStatus.DONE else str(entry.status)
+    lines = [f"- {label} by {entry.worker or 'a worker'}: {entry.summary.strip().replace(chr(10), chr(10) + '  ')}"]
+    if entry.files:
+        lines.append(f"- Files: {', '.join(entry.files)}")
+    if include_handoff and entry.handoff.strip():
+        lines.append(f"- For the next worker: {entry.handoff.strip().replace(chr(10), chr(10) + '  ')}")
+    return lines
+
+
+def _tasks(ticket: Ticket, full: bool) -> list[str]:
+    """Return the plan's tasks, each with its worker, whether it is done and what was left behind."""
+    lines = []
+    last_done_id = ticket.tasks_done[-1] if ticket.tasks_done else None
+    for task in ticket.subtasks:
+        mark = "x" if task.id in ticket.tasks_done else " "
+        lines += ["", f"### [{mark}] {task.id} · {task.title} (worker {task.worker})"]
+        if full:
+            lines += ["", task.instructions, ""]
+        records = [entry for entry in ticket.work_log if entry.subtask == task.id]
+        if records:
+            include_handoff = full or (task.id == last_done_id)
+            lines += work_record(records[-1], include_handoff=include_handoff)
+    return lines
+
+
+def _questions(ticket: Ticket) -> list[str]:
+    """Return every question a worker asked, with its answer."""
+    lines = []
+    for entry in ticket.qa:
+        where = f" on {entry.task}" if entry.task else ""
+        lines.append(f"- Worker {entry.worker}{where} asked: {entry.question}")
+        lines.append(f"  The {entry.answered_by} answered: {entry.answer}" if entry.answer else "  Not answered yet.")
+    return lines
+
+
+def ticket_markdown(ticket: Ticket, full: bool = True) -> str:
+    """Return the ticket as markdown.
+
+    The full form is the ticket's .md file and what `cw show` prints. The short form (no status, task
+    instructions or reviews) is what a worker is given: the request, the answers, the plan and what was done.
+    """
+    lines = [f"# {ticket.title}"]
+    if full:
+        lines += ["", f"Ticket `{ticket.id}` · {ticket.project} · {ticket.status} · branch `{ticket.branch}`"]
+        if ticket.pr_url:
+            lines.append(f"PR: {ticket.pr_url}")
+        lines += [f"- Warning: {warning}" for warning in ticket.warnings]
+        if ticket.error:
+            lines.append(f"- Error: {ticket.error}")
+    lines += ["", "## Request (the user's prompts, latest last)", ""]
+    lines += [
+        f"{index}. {'(answer) ' if entry.is_answer else ''}{entry.text}"
+        for index, entry in enumerate(ticket.prompts, start=1)
     ]
-    if ticket.pr_url:
-        lines.append(f"PR: {ticket.pr_url}")
-    lines += [f"! {warning}" for warning in ticket.warnings]
-    if ticket.error:
-        lines.append(f"Error: {ticket.error}")
-    lines += ["", "Prompts:"] + [f"- {entry.text}" for entry in ticket.prompts]
-    if ticket.questions:
-        lines += ["", "Questions:"] + [f"- {question}" for question in ticket.questions]
+    if full and ticket.questions:
+        lines += ["", "## Waiting for your answer", ""] + [f"- {question}" for question in ticket.questions]
+    if ticket.qa:
+        lines += ["", "## Questions and answers", ""] + _questions(ticket)
     if ticket.plan:
-        lines += ["", "Plan:", ticket.plan]
-    if ticket.work_log:
-        lines += ["", "Work:"] + [f"- [{work.status}] {work.summary}" for work in ticket.work_log]
-    for review in ticket.reviews:
-        lines += ["", f"Review {review.round} ({review.reviewer}): {review.verdict}", review.summary]
-        lines += [f"- {c.path}:{c.line} ({c.severity}) {c.body}" for c in review.comments]
+        lines += ["", "## Plan", "", ticket.plan]
+    if ticket.subtasks:
+        lines += ["", "## Tasks"] + _tasks(ticket, full)
+    other = [entry for entry in ticket.work_log if entry.subtask is None]
+    if other:
+        lines += ["", "## Other work (follow-ups and fixes)", ""]
+        for entry in other:
+            lines += work_record(entry)
+    if full:
+        for review in ticket.reviews:
+            lines += ["", f"## Review {review.round} by {review.reviewer}: {review.verdict}", "", review.summary]
+            lines += [f"- `{c.path}:{c.line}` ({c.severity}) {c.body}" for c in review.comments]
     return "\n".join(lines) + "\n"
 
 

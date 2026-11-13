@@ -1,7 +1,7 @@
 [project]
 name = "cw"
 version = "0.1.0"
-description = "Terminal orchestrator for Claude Code: tickets, planner/worker/reviewer agents, worktrees and pull requests across projects."
+description = "Terminal orchestrator for Claude Code: tickets, planner, worker and reviewer agents, one branch and one pull request per ticket."
 requires-python = ">=3.13"
 dependencies = [
     "pydantic>=2.13",

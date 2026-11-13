@@ -3,14 +3,15 @@
 import argparse
 import json
 import logging
+import signal
 import sys
 from importlib import resources
 from pathlib import Path
 
-from cw import onboarding, pipeline, reports
-from cw.config import GitHostProvider, config_path, get_settings, save_settings, validate_config
+from cw import onboarding, pipeline, reports, repo_map
+from cw.config import GitHostProvider, config_path, get_settings, repo_map_path, save_settings, validate_config
 from cw.errors import AppException
-from cw.tickets import CLOSED_STATUSES, find_ticket, list_tickets, looks_like_ticket_id, render_ticket
+from cw.tickets import CLOSED_STATUSES, find_ticket, list_tickets, looks_like_ticket_id, ticket_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,8 @@ EXAMPLE_CONFIG = "config.example.json"
 LOG_FORMAT = "%(asctime)s %(message)s"
 LOG_DATE_FORMAT = "%H:%M:%S"
 FAILURE_EXIT_CODE = 1
+STOPPED_EXIT_CODE = 130
+GITHUB_VISIBILITIES = ("private", "public")
 
 
 def _print_json(data: object) -> None:
@@ -54,13 +57,30 @@ def _project(arguments: argparse.Namespace) -> None:
             settings = get_settings()
             path = onboarding.write_project_settings(settings, settings.project(arguments.name))
             logger.info("Wrote %s. Commit it so teammates' Claude Code installs the same toolkit.", path)
+        case "map":
+            settings = get_settings()
+            project = settings.project(arguments.name)
+            map_path = repo_map_path(project.name)
+            content = repo_map.write_project_repo_map(project.path, map_path)
+            if arguments.json:
+                _print_json({"project": project.name, "path": str(map_path), "lines": len(content.splitlines())})
+            else:
+                print(content)
+
+
+def _new(arguments: argparse.Namespace) -> None:
+    """Create a project from nothing and start its first ticket with the planner."""
+    project = onboarding.create_project(
+        arguments.name, arguments.idea, Path(arguments.path), arguments.stack, arguments.github
+    )
+    _report(pipeline.start_ticket(project.name, arguments.idea, plan_first=True, new_project=True).id)
 
 
 def _run(arguments: argparse.Namespace) -> None:
     """Start a ticket in a project, or add a prompt to an existing ticket."""
     settings = get_settings()
     if any(project.name == arguments.target for project in settings.projects):
-        ticket = pipeline.start_ticket(arguments.target, arguments.prompt, arguments.plan)
+        ticket = pipeline.start_ticket(arguments.target, arguments.prompt, arguments.plan, base=arguments.base)
     elif looks_like_ticket_id(arguments.target):
         ticket = pipeline.follow_up(arguments.target, arguments.prompt)
     else:
@@ -77,9 +97,14 @@ def _report(ticket_id: str) -> None:
             if ticket.split
             else f'answer with: cw run {ticket.id} "<answers>"'
         ),
+        "in_progress": f"it stopped before it finished; continue with: cw resume {ticket.id}",
         "awaiting_approval": f"review the plan, then: cw approve {ticket.id}",
-        "ready": f'follow up with cw run {ticket.id} "...", or finish with: cw pr {ticket.id}',
-        "pr_open": f"merge {ticket.pr_url}, then: cw done {ticket.id}",
+        "ready": f'follow up with cw run {ticket.id} "...", or review and open the PR with: cw pr {ticket.id}',
+        "pr_open": (
+            f"merge {ticket.pr_url}, then: cw done {ticket.id}"
+            if ticket.pr_url
+            else f"look at the commit on {ticket.branch}, then merge it with: cw done {ticket.id}"
+        ),
         "paused": f"usage limit reached; later run: cw resume {ticket.id}",
         "blocked": f'fix the cause, then cw resume {ticket.id} or cw run {ticket.id} "..."',
     }
@@ -111,7 +136,7 @@ def _show(arguments: argparse.Namespace) -> None:
     if arguments.json:
         _print_json(ticket.model_dump(mode="json") | {"archived": ticket.status in CLOSED_STATUSES})
         return
-    print(render_ticket(ticket))
+    print(ticket_markdown(ticket))
 
 
 def _config(arguments: argparse.Namespace) -> None:
@@ -158,28 +183,35 @@ def _parser() -> argparse.ArgumentParser:
     project_commands.add_parser("wire", help="write the toolkit into the repo's .claude/settings.json").add_argument(
         "name"
     )
+    map_command = project_commands.add_parser("map", help="generate or print the deterministic architecture map")
+    map_command.add_argument("name")
+    map_command.add_argument("--json", action="store_true")
     project.set_defaults(handler=_project)
+
+    new = commands.add_parser("new", help="create a project from nothing and plan it from your idea")
+    new.add_argument("name", help="folder and project name")
+    new.add_argument("idea", help="what the project should do")
+    new.add_argument("--path", default=".", help="folder to create it in (default: the current folder)")
+    new.add_argument("--stack", help="stack from the config (default: the first one)")
+    new.add_argument("--github", choices=GITHUB_VISIBILITIES, help="also create the repository on GitHub with gh")
+    new.set_defaults(handler=_new)
 
     run = commands.add_parser("run", help="start a ticket in a project, or follow up on a ticket")
     run.add_argument("target", help="project name or ticket id")
     run.add_argument("prompt")
     run.add_argument("--plan", action="store_true", help="plan first instead of going straight to a worker")
+    run.add_argument("--base", help="start the ticket from this branch instead of the project's base branch")
     run.set_defaults(handler=_run)
 
     for name, help_text, function in (
         ("approve", "approve the plan and run the workers", pipeline.approve),
-        ("resume", "re-run the step that paused or blocked", pipeline.resume),
+        ("resume", "re-run the step that paused, blocked or was stopped", pipeline.resume),
+        ("review", "run the checks and the reviewer on the change; nothing is committed", pipeline.review),
+        ("pr", "review the change, commit it once, push and open the pull request", pipeline.open_pull_request),
     ):
         command = commands.add_parser(name, help=help_text)
         command.add_argument("ticket")
         command.set_defaults(handler=lambda arguments, function=function: _report(function(arguments.ticket).id))
-
-    pr = commands.add_parser("pr", help="check, review, commit once, push and open the pull request")
-    pr.add_argument("ticket")
-    pr.add_argument("--skip-review", action="store_true", help="open it with the last review as it is")
-    pr.set_defaults(
-        handler=lambda arguments: _report(pipeline.open_pull_request(arguments.ticket, arguments.skip_review).id)
-    )
 
     split = commands.add_parser("split", help="start one ticket per change the planner split out")
     split.add_argument("ticket")
@@ -237,9 +269,13 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> None:
     """Entry point."""
     logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT, stream=sys.stderr)
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     arguments = _parser().parse_args()
     try:
         arguments.handler(arguments)
     except AppException as error:
         logger.error("✗ %s", error)
         sys.exit(FAILURE_EXIT_CODE)
+    except KeyboardInterrupt:
+        logger.error("✗ Stopped. Continue a ticket with: cw resume <ticket>")
+        sys.exit(STOPPED_EXIT_CODE)

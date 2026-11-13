@@ -4,6 +4,61 @@ A running log of what went wrong in real use, why, and what was changed. Newest 
 
 ---
 
+## 2026-11-13 · Review of the whole project: bug fixes, worker sessions, rules that arrive, projects from zero
+
+**Why:** a read-through of all the code and documents, with the bugs below confirmed by small tests, and a clearer goal: tell cw an idea and get a reviewed project, without touching the code and without wasting tokens.
+
+### Bugs found and fixed
+
+| # | Symptom | Root cause | Fix |
+|---|---|---|---|
+| 1 | Merge conflicts with the base could never be resolved: the worker fixed the files, then cw aborted the merge | git keeps a file "unmerged" until it is staged, and cw checked before staging | cw checks the files for conflict markers, stages them and commits the merge |
+| 2 | After cw merged the base, the next review included everyone else's changes from `main` | the "already reviewed" marker was the tree before the merge | the marker moves with the merge |
+| 3 | `git -C . commit`, `git branch --delete`, `git restore .`, `git clean -fd`, `cat secrets/key.txt` passed the guard; a grep for the text "git commit" was blocked | the guard matched text | the guard reads the command the way a shell splits it |
+| 4 | Ctrl+C, FRIDAY's Stop or a crash left the ticket "in progress" for good; a reply then skipped the remaining tasks | only cw's own errors were recorded | every stop records the step; `cw resume` continues; a reply runs first, then the remaining tasks |
+| 5 | Stop in FRIDAY stopped the shell, not the agent | the agent was a grandchild process | cw replaces the shell (`exec`), and runs agents and checks in a process group it kills on stop or timeout |
+| 6 | An agent or a test command could hang forever | no time limit, and the turn cap was only passed inside the agent JSON | `agent_timeout_minutes`, `check_timeout_minutes`, and `--max-turns` on the command line |
+| 7 | Agents were told to follow "the stack rules you were given" but got none | the rulebook was unpinned to save tokens, and no agent has the Skill tool to load it | a short pinned core, topic files shown by a hook, exact topics pinned for the reviewer (EXPLANATION §7) |
+| 8 | The ruff hook reformatted whole files and reported old lint errors | it treated every problem in an edited file as the agent's | a file is held only to the standard it met in the last commit |
+| 9 | The worker did not know the lint and test commands, or which checks already failed | the prompt never said | a "Checks" section in the worker's prompt |
+| 10 | The reviewer never saw the worker's notes or whether the checks passed | the review prompt left them out | both are in the review prompt |
+| 11 | Tokens of failed runs were lost; a run that hit the turn limit failed without saying why | the usage was dropped when the run failed | recorded on the ticket, with the reason |
+| 12 | Opening a PR with no changes blocked the ticket; a PR reopened by `cw pr` got the same review posted twice | missing checks | refused up front; a review is posted once |
+| 13 | FRIDAY could hang reading a large `cw … --json` answer | it read the output only after the command ended, and a pipe holds about 64 KB | it reads while the command runs |
+| 14 | The Bitbucket token was visible to agents | they inherited cw's whole environment | removed from the agent's environment |
+| 15 | Files a check command creates (a new `uv.lock`, a report) silently became part of the ticket's commit | cw stages everything in the checkout | the ticket now warns right after the baseline, naming the files |
+
+### What changed in the design
+
+1. **Workers keep their session.** The planner gives each task to a worker (`W1`…, at most `max_workers`, default 4). Related tasks, follow-ups, fixes and answers continue that worker's session, so nothing is re-read; a resumed worker is sent only what is new. Workers still take turns in one checkout.
+2. **The ticket is the only channel between agents.** Each finished task records how it was solved, its files and a note for the next worker. The ticket is also written as `<id>.md`.
+3. **Agents can ask.** Worker → planner → you. Capped by `max_question_rounds`.
+4. **The review is mandatory and strict.** `cw pr` always reviews, then opens the PR with the findings on it; `--skip-review` is gone. `cw review` reviews without committing. The reviewer follows the new `pr-review` skill.
+5. **Projects from zero.** `cw new <name> "<idea>"` creates the repository, registers it and plans it. Without a remote, `cw pr` commits on the branch and `cw done` merges it.
+6. **`--base <branch>`** starts a ticket from another branch; its PR goes back there.
+7. **Live view.** cw reads the agent's `stream-json` output and prints each tool call.
+8. **The planner's task rules** are explicit: one outcome per task, complete instructions, a `Done when:` line, exact files, no file in two tasks, small tasks.
+9. **FRIDAY:** dictation and spoken status, chat and look preferences, Resume for stopped tickets, Review only.
+10. **Documents:** a `CLAUDE.md` for this repository; stale text removed.
+
+### Verified
+
+58 tests run the real cw code with a stand-in for `claude` (EXPLANATION §16 lists what they cover); backend lint and format are clean.
+
+### Not verified yet
+
+- Any real agent run after these changes. Start with a throwaway project: `cw new` with Haiku as every model.
+- The Swift changes were written without a compiler. Run `./friday/build-app.sh` and fix or report what it prints.
+- Real PRs on GitHub and Bitbucket, `cw new --github`, usage-limit detection.
+- What the new design costs in tokens (EXPLANATION §14).
+
+### Still open
+
+- Decided: `.env` is no longer a default protected path, so agents can update it and `.env.example` when a task changes a setting. The engineering rule now reads "never print or commit `.env`" instead of "never read". Projects registered earlier keep their own list until you change it.
+- The older items below (ComIntern SSH access, its old ticket, its commands).
+
+---
+
 ## 2026-11-11 (later) · One worker, one branch, in your checkout
 
 **Why:** after the first round of fixes, the remaining complexity was in parallel workers and worktrees, which this team doesn't need.

@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 EXCLUDE_FILE = Path("info") / "exclude"
 CONFLICT_FILTER = "--diff-filter=U"
 CONFLICT_MARKER = "^<<<<<<< "
+MERGES_ONLY = "--merges"
+PORCELAIN_PATH_COLUMN = 3
 
 
 def git(cwd: Path, *arguments: str, check: bool = True) -> str:
@@ -55,6 +57,11 @@ def fetch_base(path: Path, remote: str, base_branch: str) -> tuple[str, str]:
 def is_clean(cwd: Path) -> bool:
     """Return whether the checkout has no uncommitted or untracked changes."""
     return not git(cwd, "status", "--porcelain")
+
+
+def changed_paths(cwd: Path) -> list[str]:
+    """Return the paths git reports as changed or untracked in the checkout."""
+    return [line[PORCELAIN_PATH_COLUMN:] for line in git(cwd, "status", "--porcelain").splitlines()]
 
 
 def switch_new(cwd: Path, branch: str, start_point: str) -> None:
@@ -115,6 +122,11 @@ def diff_stat(cwd: Path, old: str, new: str) -> str:
     return git(cwd, "diff", "--stat", old, new)
 
 
+def changed_files(cwd: Path, old: str, new: str) -> list[str]:
+    """Return the paths that differ between two commits or trees."""
+    return git(cwd, "diff", "--name-only", old, new).splitlines()
+
+
 def merge(cwd: Path, ref: str) -> bool:
     """Merge a ref; return False when it stopped on conflicts."""
     result = subprocess.run(["git", "merge", "--no-edit", ref], cwd=cwd, capture_output=True, text=True)
@@ -122,10 +134,31 @@ def merge(cwd: Path, ref: str) -> bool:
 
 
 def conflicted_files(cwd: Path) -> list[str]:
-    """Return files that still have unresolved conflicts or conflict markers."""
-    unmerged = git(cwd, "diff", "--name-only", CONFLICT_FILTER).splitlines()
-    markers = git(cwd, "grep", "-l", "-E", CONFLICT_MARKER, check=False).splitlines()
-    return sorted({*unmerged, *markers} - {""})
+    """Return the files a stopped merge left unmerged."""
+    return sorted(set(git(cwd, "diff", "--name-only", CONFLICT_FILTER).splitlines()) - {""})
+
+
+def files_with_conflict_markers(cwd: Path, files: list[str]) -> list[str]:
+    """Return which of these files still contain conflict markers."""
+    if not files:
+        return []
+    return git(cwd, "grep", "-l", "-E", CONFLICT_MARKER, "--", *files, check=False).splitlines()
+
+
+def conclude_merge(cwd: Path, message: str) -> None:
+    """Stage the resolved files and create the merge commit."""
+    git(cwd, "add", "-A")
+    git(cwd, "commit", "-m", message)
+
+
+def has_merge_commits(cwd: Path, base: str) -> bool:
+    """Return whether the branch already contains a merge since base."""
+    return bool(git(cwd, "rev-list", MERGES_ONLY, f"{base}..HEAD"))
+
+
+def init(path: Path, branch: str) -> None:
+    """Create a new repository with this first branch."""
+    git(path, "init", "-b", branch)
 
 
 def abort_merge(cwd: Path) -> None:

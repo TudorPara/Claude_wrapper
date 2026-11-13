@@ -18,7 +18,11 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>FRIDAY listens while you dictate a request into the chat.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>FRIDAY turns what you say into the text of your request.</string>
 </dict>
 </plist>
 PLIST
+# Sign the bundle so macOS ties the microphone and speech permissions to it.
+codesign --force --sign - "$app" || echo "Could not sign $app: dictation permissions may not stick."
 echo "Built $(pwd)/$app — drag it to /Applications or run: open $app"

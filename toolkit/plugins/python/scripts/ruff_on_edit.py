@@ -1,4 +1,8 @@
-"""Format and lint a Python file with ruff right after Claude Code edits it."""
+"""Format and lint a Python file with ruff right after Claude Code edits it.
+
+A file is held to the standard it met in the last commit: one that was unformatted, or had lint errors, before
+the edit is left as it is, so Claude is never sent to fix problems it did not cause. New files are held to both.
+"""
 
 import json
 import shutil
@@ -7,9 +11,11 @@ import sys
 from pathlib import Path
 
 FEEDBACK_EXIT_CODE = 2
+RUFF_FOUND_ERRORS = 1
 PYTHON_SUFFIX = ".py"
 PROJECT_MARKER = "pyproject.toml"
 PROJECT_RUFF = Path(".venv") / "bin" / "ruff"
+STDIN = "-"
 
 
 def _project_root(file_path: Path) -> Path:
@@ -20,23 +26,47 @@ def _project_root(file_path: Path) -> Path:
     return file_path.parent
 
 
-def _ruff(arguments: list[str], root: Path) -> subprocess.CompletedProcess[str]:
-    """Run the project's installed ruff, or uvx's when the project has none; never create a venv or lockfile."""
+def _ruff_command(root: Path) -> list[str] | None:
+    """Return the project's installed ruff, or uvx's when the project has none; never create a venv or lockfile."""
     project_ruff = root / PROJECT_RUFF
-    command = [str(project_ruff)] if project_ruff.exists() else ["uvx", "--quiet", "ruff"]
-    return subprocess.run([*command, *arguments], cwd=root, capture_output=True, text=True)
+    if project_ruff.exists():
+        return [str(project_ruff)]
+    return ["uvx", "--quiet", "ruff"] if shutil.which("uvx") else None
+
+
+def _committed_version(file_path: Path, root: Path) -> str | None:
+    """Return the file as it is in the last commit, or None when it is new or there is no repository."""
+    shown = subprocess.run(
+        ["git", "show", f"HEAD:./{file_path.relative_to(root)}"], cwd=root, capture_output=True, text=True
+    )
+    return shown.stdout if shown.returncode == 0 else None
+
+
+def _ruff(ruff: list[str], arguments: list[str], root: Path, source: str | None = None) -> bool:
+    """Run ruff, optionally on source text given on standard input; return whether it found nothing to report."""
+    return subprocess.run([*ruff, *arguments], cwd=root, input=source, capture_output=True, text=True).returncode == 0
 
 
 def main() -> int:
-    """Format the edited file, then report lint errors back to Claude."""
+    """Format the edited file and report lint errors back to Claude, where the file was clean before."""
     payload = json.load(sys.stdin)
-    file_path = Path(payload.get("tool_input", {}).get("file_path", ""))
-    if file_path.suffix != PYTHON_SUFFIX or not file_path.exists() or not shutil.which("uv"):
+    file_path = Path(payload.get("tool_input", {}).get("file_path", "")).resolve()
+    if file_path.suffix != PYTHON_SUFFIX or not file_path.exists():
         return 0
     root = _project_root(file_path)
-    _ruff(["format", str(file_path)], root)
-    check = _ruff(["check", "--fix", str(file_path)], root)
-    if check.returncode == 1:
+    ruff = _ruff_command(root)
+    if ruff is None:
+        return 0
+    committed = _committed_version(file_path, root)
+    from_stdin = ["--stdin-filename", str(file_path), STDIN]
+    was_formatted = committed is None or _ruff(ruff, ["format", "--check", *from_stdin], root, committed)
+    was_lint_clean = committed is None or _ruff(ruff, ["check", *from_stdin], root, committed)
+    check = None
+    if was_lint_clean:
+        check = subprocess.run([*ruff, "check", "--fix", str(file_path)], cwd=root, capture_output=True, text=True)
+    if was_formatted:
+        _ruff(ruff, ["format", str(file_path)], root)
+    if check is not None and check.returncode == RUFF_FOUND_ERRORS:
         print(f"ruff found problems in {file_path}:\n{check.stdout}{check.stderr}", file=sys.stderr)
         return FEEDBACK_EXIT_CODE
     return 0

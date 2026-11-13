@@ -52,14 +52,14 @@ struct NextStepCard: View {
 
     private var headline: String {
         switch ticket.status {
-        case .needsInput: (ticket.split ?? []).isEmpty ? "Answer the planner's questions in the chat." : "This is several changes: start one ticket for each."
+        case .needsInput: (ticket.split ?? []).isEmpty ? "Answer the questions in the chat." : "This is several changes: start one ticket for each."
         case .awaitingApproval: "Read the plan, then approve it or reply to change it."
-        case .inProgress: "Working…"
-        case .ready: reviewWarning ? "The reviewer still has findings: follow up, or open the PR anyway." : "Done and checked. Follow up in the chat, or open the PR."
-        case .inReview: "Reviewing…"
+        case .inProgress: "Stopped before it finished: Resume to continue."
+        case .ready: reviewWarning ? "The reviewer has findings: follow up in the chat, or open the PR with them." : "Done and checked. Follow up in the chat, or review and open the PR."
+        case .inReview: "Stopped during review: Resume to continue."
         case .blocked: "Stopped on an error: fix it, then Resume, or follow up in the chat."
         case .paused: "Paused on the usage limit: Resume later."
-        case .prOpen: "PR open: merge it on the code host, then mark done."
+        case .prOpen: ticket.prUrl == nil ? "Reviewed and committed on its branch: Mark done merges it into the base branch." : "PR open: merge it on the code host, then mark done."
         case .done: "Done."
         case .abandoned: "Abandoned."
         }
@@ -78,13 +78,18 @@ struct NextStepCard: View {
         } else if !closed {
             HStack(spacing: 6) {
                 Image(systemName: "laptopcomputer").foregroundStyle(.secondary)
-                Text(onBranch
-                    ? (changed == 0 ? "Local only · on \(ticket.branch) in your checkout · no changes yet" : "Local only · \(changed) changed file\(changed == 1 ? "" : "s") on \(ticket.branch), not committed or pushed")
-                    : "Parked on \(ticket.branch) · your checkout is on another branch")
+                Text(localState)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var localState: String {
+        if ticket.status == .prOpen { return "Committed on \(ticket.branch) · not merged yet" }
+        if !onBranch { return "Parked on \(ticket.branch) · your checkout is on another branch" }
+        if changed == 0 { return "Local only · on \(ticket.branch) in your checkout · no changes yet" }
+        return "Local only · \(changed) changed file\(changed == 1 ? "" : "s") on \(ticket.branch), not committed or pushed"
     }
 
     private var buttons: some View {
@@ -96,12 +101,12 @@ struct NextStepCard: View {
                 primary("Approve plan", ["approve", ticket.id])
             case .ready:
                 primary(ticket.prUrl == nil ? "Review & open PR" : "Review & update PR", ["pr", ticket.id])
-                if reviewWarning { secondary("Open PR anyway", ["pr", ticket.id, "--skip-review"]) }
-            case .blocked, .paused:
+                secondary("Review only", ["review", ticket.id])
+            case .blocked, .paused, .inProgress, .inReview:
                 primary("Resume", ["resume", ticket.id])
             case .prOpen:
                 primary("Mark done", ["done", ticket.id])
-                secondary("CI status", ["ci", ticket.id])
+                if ticket.prUrl != nil { secondary("CI status", ["ci", ticket.id]) }
             default:
                 EmptyView()
             }

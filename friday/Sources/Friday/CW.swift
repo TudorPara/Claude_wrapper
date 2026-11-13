@@ -13,7 +13,8 @@ struct CW {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         let command = ([executable] + arguments).map(shellQuote).joined(separator: " ")
-        process.arguments = ["-lc", command]
+        // `exec` makes cw replace the shell, so stopping this process stops cw itself (and the agent it runs).
+        process.arguments = ["-lc", "exec " + command]
         var environment = ProcessInfo.processInfo.environment
         if !home.isEmpty { environment["CW_HOME"] = (home as NSString).expandingTildeInPath }
         process.environment = environment
@@ -30,26 +31,29 @@ struct CW {
         let process = makeProcess(arguments)
         let out = Pipe()
         let err = Pipe()
+        let input = Pipe()
         process.standardOutput = out
         process.standardError = err
-        let input = Pipe()
         process.standardInput = input
         return try await withCheckedThrowingContinuation { continuation in
-            process.terminationHandler = { finished in
-                let data = out.fileHandleForReading.readDataToEndOfFile()
-                let errors = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                if finished.terminationStatus == 0 {
-                    continuation.resume(returning: data)
-                } else {
-                    continuation.resume(throwing: Failure(message: errors.isEmpty ? "cw exited with \(finished.terminationStatus)" : errors))
+            DispatchQueue.global().async {
+                do {
+                    try process.run()
+                } catch {
+                    continuation.resume(throwing: error)
+                    return
                 }
-            }
-            do {
-                try process.run()
                 if let stdin { input.fileHandleForWriting.write(stdin) }
                 try? input.fileHandleForWriting.close()
-            } catch {
-                continuation.resume(throwing: error)
+                // Read while the command runs: a pipe holds about 64 KB, and a command that fills it would wait forever.
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                let errors = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                process.waitUntilExit()
+                if process.terminationStatus == 0 {
+                    continuation.resume(returning: data)
+                } else {
+                    continuation.resume(throwing: Failure(message: errors.isEmpty ? "cw exited with \(process.terminationStatus)" : errors))
+                }
             }
         }
     }

@@ -5,18 +5,18 @@
   },
   "metadata": {
     "description": "Shared agents, skills, rules and hooks for every Nexttech project.",
-    "version": "0.1.0"
+    "version": "0.2.1"
   },
   "plugins": [
     {
       "name": "core",
       "source": "./plugins/core",
-      "description": "Stack-independent pieces: planner, worker, reviewer and onboarder agents, clean-code and rule-precedence skills, the bootstrap-project command and the guard hook."
+      "description": "Stack-independent pieces: planner, worker, reviewer and onboarder agents, the engineering, clean-code and rule-precedence skills, the bootstrap-project command and the guard hook."
     },
     {
       "name": "python",
       "source": "./plugins/python",
-      "description": "Python stack: the team's python-rules skill and a ruff format/check hook after every edit."
+      "description": "Python stack: the team's python-rules skill (a short core plus topic files), a hook that shows a topic when a file it covers is touched, and a ruff hook after every edit."
     }
   ]
 }

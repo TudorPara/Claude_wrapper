@@ -14,10 +14,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct FridayApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var store = Store()
+    @AppStorage(Preference.accent) private var accent = Preference.defaultAccent
 
     var body: some Scene {
         WindowGroup("FRIDAY") {
             RootView()
+                .id(accent)
                 .environment(store)
                 .frame(minWidth: 1100, minHeight: 700)
                 .tint(Theme.accent)

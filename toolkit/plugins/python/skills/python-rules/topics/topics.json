@@ -1,0 +1,56 @@
+{
+  "new_project": [
+    "stack-layout"
+  ],
+  "review": [
+    "git-pr"
+  ],
+  "topics": {
+    "stack-layout": [
+      "pyproject.toml",
+      "docker-compose.yml",
+      ".python-version"
+    ],
+    "configuration": [
+      "config.py",
+      "settings.py",
+      ".env.example"
+    ],
+    "layers": [
+      "routes/",
+      "services/",
+      "repositories/",
+      "entry_point/",
+      "dependencies.py",
+      "lifespan.py"
+    ],
+    "errors-logging": [
+      "errors.py",
+      "exceptions.py",
+      "logging_config.py",
+      "middleware.py"
+    ],
+    "security": [
+      "core/",
+      "middleware.py",
+      "cookies.py",
+      "*auth*"
+    ],
+    "data-api": [
+      "schemas/",
+      "models/",
+      "database/",
+      "alembic/",
+      "alembic.ini"
+    ],
+    "agents": [
+      "graphs/",
+      "llm/",
+      "embeddings/",
+      "tools/",
+      "chains/",
+      "*_tool.py"
+    ],
+    "git-pr": []
+  }
+}

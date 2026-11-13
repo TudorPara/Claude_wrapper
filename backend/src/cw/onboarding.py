@@ -2,6 +2,7 @@
 
 import json
 import logging
+import subprocess
 from pathlib import Path
 
 from cw import git
@@ -23,6 +24,11 @@ from cw.prompts import onboarder_prompt
 logger = logging.getLogger(__name__)
 
 DEFAULT_REMOTE = "origin"
+NEW_PROJECT_BRANCH = "main"
+FIRST_COMMIT_MESSAGE = "chore: start project"
+NEW_PROJECT_GITIGNORE = "\n".join(
+    [".env", ".venv/", "__pycache__/", ".pytest_cache/", ".ruff_cache/", "node_modules/", "target/", ".DS_Store", ""]
+)
 ONBOARDER_AGENT = "onboarder"
 PROJECT_SETTINGS_FILE = Path(".claude") / "settings.json"
 HOST_MARKERS = {"github.com": GitHostProvider.GITHUB, "bitbucket.org": GitHostProvider.BITBUCKET}
@@ -51,7 +57,9 @@ def _detect_host(url: str) -> GitHostProvider | None:
     return None
 
 
-def add_project(path: Path, name: str | None, host: GitHostProvider | None, onboard: bool) -> Project:
+def add_project(
+    path: Path, name: str | None, host: GitHostProvider | None, onboard: bool, stack: str | None = None
+) -> Project:
     """Register a repository with the default profile; the stack's commands are its starting commands."""
     settings = get_settings()
     path = path.expanduser().resolve()
@@ -62,7 +70,7 @@ def add_project(path: Path, name: str | None, host: GitHostProvider | None, onbo
         raise AppException(
             AppErrorCode.INVALID_CONFIGURATION, "Cannot tell the code host; pass --host github|bitbucket."
         )
-    stack = detect_stack(settings, path)
+    stack = stack or detect_stack(settings, path)
     stack_settings = settings.stack(stack)
     project = Project(
         name=name or path.name,
@@ -85,6 +93,33 @@ def add_project(path: Path, name: str | None, host: GitHostProvider | None, onbo
     if onboard:
         return onboard_project(project.name)
     return project
+
+
+def create_project(name: str, idea: str, parent: Path, stack: str | None, github: str | None) -> Project:
+    """Create the repository of a new project (a README and a .gitignore), optionally on GitHub, and register it."""
+    settings = get_settings()
+    stack = stack or next(iter(settings.stacks), "")
+    if settings.stack(stack) is None:
+        raise AppException(AppErrorCode.INVALID_CONFIGURATION, f"No stack '{stack}' in the config.")
+    path = (parent.expanduser() / name).resolve()
+    if path.exists() and any(path.iterdir()):
+        raise AppException(AppErrorCode.INVALID_CONFIGURATION, f"{path} already exists and is not empty.")
+    path.mkdir(parents=True, exist_ok=True)
+    git.init(path, NEW_PROJECT_BRANCH)
+    (path / "README.md").write_text(f"# {name}\n\n{idea.strip()}\n")
+    (path / ".gitignore").write_text(NEW_PROJECT_GITIGNORE)
+    git.commit_all(path, FIRST_COMMIT_MESSAGE)
+    if github:
+        created = subprocess.run(
+            ["gh", "repo", "create", name, f"--{github}", "--source", ".", "--remote", DEFAULT_REMOTE, "--push"],
+            cwd=path,
+            capture_output=True,
+            text=True,
+        )
+        if created.returncode != 0:
+            raise AppException(AppErrorCode.GIT_HOST_FAILED, created.stderr.strip())
+    logger.info("Created %s.", path)
+    return add_project(path, name, GitHostProvider.GITHUB, onboard=False, stack=stack)
 
 
 def onboard_project(name: str) -> Project:

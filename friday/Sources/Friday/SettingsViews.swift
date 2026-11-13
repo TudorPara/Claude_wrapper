@@ -52,11 +52,22 @@ struct ProfileEditor: View {
             LabeledStepper(title: "Review rounds", help: "Worker fixes after the reviewer asks for changes", value: $profile.limits.maxReviewRounds, range: 0...10)
             LabeledStepper(title: "Fix rounds", help: "Worker fixes after lint or tests fail", value: $profile.limits.maxFixRounds, range: 0...10)
             LabeledStepper(title: "Conflict rounds", help: "Attempts to resolve conflicts with the base branch", value: $profile.limits.maxConflictRounds, range: 0...5)
-            LabeledStepper(title: "Question rounds", help: "Times the planner may come back with questions", value: $profile.limits.maxQuestionRounds, range: 0...5)
+            LabeledStepper(title: "Question rounds", help: "Times the planner may ask you, and a worker may ask per instruction", value: $profile.limits.maxQuestionRounds, range: 0...5)
             LabeledStepper(title: "Escalation threshold", help: "A direct task touching more files goes to the planner", value: $profile.limits.escalateFileThreshold, range: 1...50)
             LabeledStepper(title: "Summary lines", help: "Longest summary an agent writes into the ticket", value: $profile.limits.summaryMaxLines, range: 3...60)
             LabeledStepper(title: "Diff characters", help: "Longest diff sent to the reviewer", value: $profile.limits.maxDiffChars, range: 5_000...400_000, step: 5_000)
             LabeledStepper(title: "Check output characters", help: "Longest lint/test output sent back to the worker", value: $profile.limits.maxCheckOutputChars, range: 500...40_000, step: 500)
+            Group {
+                LabeledStepper(
+                    title: "Workers", help: "Most workers the planner may spread a plan over; they take turns",
+                    value: Binding(get: { profile.limits.maxWorkers ?? 4 }, set: { profile.limits.maxWorkers = $0 }), range: 1...8)
+                LabeledStepper(
+                    title: "Agent time limit (minutes)", help: "An agent run that takes longer is stopped",
+                    value: Binding(get: { profile.limits.agentTimeoutMinutes ?? 45 }, set: { profile.limits.agentTimeoutMinutes = $0 }), range: 1...240)
+                LabeledStepper(
+                    title: "Check time limit (minutes)", help: "A lint or test command that takes longer counts as failed",
+                    value: Binding(get: { profile.limits.checkTimeoutMinutes ?? 15 }, set: { profile.limits.checkTimeoutMinutes = $0 }), range: 1...120)
+            }
         }
     }
 }
@@ -139,6 +150,42 @@ struct ProjectSettingsView: View {
     }
 }
 
+/// Chat, voice and look. Saved at once on this Mac; not part of cw's config.
+struct ChatPreferencesCard: View {
+    @AppStorage(Preference.chatTextSize) private var textSize = Preference.defaultChatTextSize
+    @AppStorage(Preference.liveOutputLines) private var liveLines = Preference.defaultLiveOutputLines
+    @AppStorage(Preference.planFirstByDefault) private var planFirst = false
+    @AppStorage(Preference.speakReplies) private var speakReplies = false
+    @AppStorage(Preference.voiceLanguage) private var voiceLanguage = Preference.defaultVoiceLanguage
+    @AppStorage(Preference.accent) private var accent = Preference.defaultAccent
+
+    var body: some View {
+        Card(title: "Chat, voice and look", systemImage: "bubble.left.and.bubble.right") {
+            HStack {
+                Text("Chat text size")
+                Slider(value: $textSize, in: 11...18, step: 1).frame(maxWidth: 220)
+                Text("\(Int(textSize)) pt").font(.caption).foregroundStyle(.secondary)
+            }
+            Stepper("Live output lines shown in the chat: \(liveLines)", value: $liveLines, in: 1...20)
+            Toggle("Plan first by default for new tickets", isOn: $planFirst)
+            Toggle("Speak replies: FRIDAY says where a ticket stands when a step ends", isOn: $speakReplies)
+            HStack {
+                Text("Voice language")
+                TextField("en-US", text: $voiceLanguage).frame(maxWidth: 120)
+                Text("A locale such as en-US or ro-RO, used for dictation and speech.").font(.caption).foregroundStyle(.secondary)
+            }
+            Picker("Accent colour", selection: $accent) {
+                ForEach(Theme.accents.keys.sorted(), id: \.self) { Text($0.capitalized).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 360)
+            Text("Saved at once, on this Mac only. Dictation works when FRIDAY runs as the app (FRIDAY.app) and you allow the microphone and speech recognition.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
 struct SettingsView: View {
     @Environment(Store.self) private var store
     @State private var draft: CWConfig?
@@ -162,6 +209,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                     Button("Reload") { Task { await store.refreshAll(); draft = store.config } }
                 }
+                ChatPreferencesCard()
                 if draft != nil {
                     let binding = Binding(get: { draft! }, set: { draft = $0 })
                     Card(title: "Toolkit", systemImage: "shippingbox") {

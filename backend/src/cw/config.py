@@ -29,6 +29,7 @@ DEFAULT_HOME = Path.home() / ".cw"
 CONFIG_FILE_NAME = "config.json"
 PROJECTS_DIR = "projects"
 CONVENTIONS_FILE_NAME = "conventions.md"
+REPO_MAP_FILE_NAME = "repo_map.txt"
 SECRET_FIELDS = {"bitbucket"}
 
 ExpandedPath = Annotated[Path, AfterValidator(lambda path: path.expanduser())]
@@ -80,11 +81,16 @@ class Limits(StrictModel):
     max_review_rounds: NonNegativeInt = Field(description="Fix rounds after a reviewer asks for changes.")
     max_fix_rounds: NonNegativeInt = Field(description="Fix rounds after lint or tests fail.")
     max_conflict_rounds: NonNegativeInt = Field(description="Attempts to resolve merge conflicts with the base branch.")
-    max_question_rounds: NonNegativeInt = Field(description="Times the planner may ask clarifying questions.")
+    max_question_rounds: NonNegativeInt = Field(
+        description="Times the planner may ask you, and times a worker may ask per instruction."
+    )
+    max_workers: PositiveInt = Field(default=4, description="Most workers the planner may spread a plan over.")
     escalate_file_threshold: PositiveInt = Field(description="A direct task touching more files goes to the planner.")
     summary_max_lines: PositiveInt = Field(description="Longest summary an agent may write into the ticket.")
     max_diff_chars: PositiveInt = Field(description="Longest diff sent to the reviewer.")
     max_check_output_chars: PositiveInt = Field(description="Longest lint/test output sent back to the worker.")
+    agent_timeout_minutes: PositiveInt = Field(default=45, description="Longest one agent run may take.")
+    check_timeout_minutes: PositiveInt = Field(default=15, description="Longest one lint or test command may take.")
     max_turns: RoleTurns
 
 
@@ -121,6 +127,11 @@ class Project(StrictModel):
     )
     profile: Profile
 
+    def checks(self) -> list[tuple[str, str]]:
+        """Return the configured checks as (name, command)."""
+        checks = (("lint", self.commands.lint), ("test", self.commands.test))
+        return [(name, command) for name, command in checks if command]
+
 
 class StackSettings(StrictModel):
     """What a stack loads from the toolkit and from external marketplaces."""
@@ -129,9 +140,7 @@ class StackSettings(StrictModel):
     toolkit_plugins: list[str]
     pinned_skills: list[str] = Field(description="Skills injected in full into every agent run, as plugin:skill.")
     external_plugins: list[str] = Field(description="plugin@marketplace ids enabled for this stack.")
-    commands: ProjectCommands = Field(
-        description="Setup, lint and test commands a new project of this stack starts with."
-    )
+    commands: ProjectCommands = Field(description="Lint and test commands a new project of this stack starts with.")
 
 
 class ToolkitSettings(StrictModel):
@@ -199,6 +208,11 @@ def cw_home() -> Path:
 def conventions_path(project_name: str) -> Path:
     """Return the onboarding decisions of a project, kept outside its repository."""
     return cw_home() / PROJECTS_DIR / project_name / CONVENTIONS_FILE_NAME
+
+
+def repo_map_path(project_name: str) -> Path:
+    """Return the architecture and symbol map path of a project."""
+    return cw_home() / PROJECTS_DIR / project_name / REPO_MAP_FILE_NAME
 
 
 def config_path() -> Path:
