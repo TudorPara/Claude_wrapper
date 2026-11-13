@@ -4,6 +4,37 @@ A running log of what went wrong in real use, why, and what was changed. Newest 
 
 ---
 
+## 2026-11-13 (later) · Architecture scaling: worker verification, context packs, repo maps vs. graphs, token hygiene
+
+**Why:** analyzing and solving five core failure modes regarding worker reliability, redundant codebase exploration, project knowledge representations across tickets, and prompt bloat.
+
+### Challenges encountered and how they were resolved
+
+| # | Challenge | Symptom & Root cause | Resolution |
+|---|---|---|---|
+| 1 | Worker accountability & ghost runs | Workers claim `status: "done"`, miss files they touched in `files`, or modify files outside their assigned task without alarm. cw trusted LLM claims directly. | Deterministic `git.snapshot()` captured before and after `_worker()`. `git.changed_files()` is now the source of truth, overriding LLM claims. Scope creep outside `task.files` attaches a `Scope:` warning to the ticket. |
+| 2 | Redundant code re-reading (Intra-ticket) | Planner reads code with Grep/Glob, builds a plan, but that reading is discarded. The worker starts cold and re-greps/re-reads the same files from scratch. | **Planner Context Pack**: `PlannerResult` returns 5–15 `ContextAnchor` locations (`path:lines — why it matters`). `prompts.py` renders these line anchors directly to the worker, guiding Sonnet immediately to target code. |
+| 3 | Cold starts & Knowledge Graphs vs. Maps (Inter-ticket) | Every ticket starts cold and re-discovers architecture. A full Knowledge Graph (`graphify`) was investigated. While visual graphs (`graph.html`) are great for human inspection, machine graph traversal burns excessive LLM tokens. | **Deterministic AST Repo Map (`cw.repo_map`)**: A zero-LLM local AST scanner extracts module docstrings, classes, and function signatures in <0.05s. Saves to `~/.cw/projects/<p>/repo_map.txt` on branch fetch/ticket finish and passes to Planner on turn 1. Also added `cw project map <name>`. |
+| 4 | Task dependencies vs. Sequential execution | Proposals to add a DAG `depends_on` tree to tasks were rejected: LLMs misdeclare task dependencies, creating brittle stalls and race conditions. | Maintained strict sequential execution in one checkout (`S1` → `S2` → `...`). Solved late-task prompt bloat via progressive compaction of finished task notes rather than complex dependency graphs. |
+| 5 | Reused worker session & ticket prompt bloat | Long worker sessions accumulate conversational history, ballooning context costs and degrading focus ("Lost in the Middle"). Full ticket markdown repeated stale handoffs. | **Progressive Compaction & Token Ceiling**: Completed tasks older than the latest finished task omit obsolete `For the next worker:` handoffs. Added `WORKER_SESSION_TOKEN_CEILING = 45000`: sessions reaching this ceiling refresh cleanly on the next turn seeded with compact state and `git diff --stat`. |
+| 6 | Per-ticket monolithic memory file | Proposal to append ticket histories into a shared memory file was rejected: memory files quickly fill with noise across dozens of tickets. | Tickets stay isolated in `~/.cw/tickets/<project>/`. Permanent conventions live in `conventions.md`, code structure lives in `repo_map.txt`. |
+
+### What changed in the codebase
+
+1. **`backend/src/cw/repo_map.py`**: Local AST and regex scanner for Python and Swift.
+2. **`backend/src/cw/pipeline.py`**: Before/after tree snapshots, scope creep checks, session token ceiling (`45,000`), auto-updating repo map.
+3. **`backend/src/cw/models.py` & `friday/Sources/Friday/Models.swift`**: `ContextAnchor` schema and `context_pack` on `PlannerResult` and `Ticket`.
+4. **`backend/src/cw/prompts.py`**: Injected `_context_pack` into `fresh_worker_prompt` and `_repo_map` into `planner_prompt`.
+5. **`backend/src/cw/tickets.py`**: Compacted historical task handoffs.
+6. **`backend/src/cw/cli.py`**: Added `cw project map <name> [--json]`.
+7. **`toolkit/plugins/core/agents/`**: `planner.md` outputs context pack; `worker.md` reads context pack anchors first.
+8. **Interactive Graph Tooling**: Created interactive visualizer `codebase_graph.html` (48 nodes, 141 edges) mapping `Claude_wrapper_v2` for human exploration.
+
+### Verified
+63 backend tests pass in `backend/tests/` (including `test_repo_map.py` and `test_cli.py`); `ruff check` and `ruff format` are clean.
+
+---
+
 ## 2026-11-13 · Review of the whole project: bug fixes, worker sessions, rules that arrive, projects from zero
 
 **Why:** a read-through of all the code and documents, with the bugs below confirmed by small tests, and a clearer goal: tell cw an idea and get a reviewed project, without touching the code and without wasting tokens.
