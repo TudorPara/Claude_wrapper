@@ -27,7 +27,19 @@ DEFAULT_REMOTE = "origin"
 NEW_PROJECT_BRANCH = "main"
 FIRST_COMMIT_MESSAGE = "chore: start project"
 NEW_PROJECT_GITIGNORE = "\n".join(
-    [".env", ".venv/", "__pycache__/", ".pytest_cache/", ".ruff_cache/", "node_modules/", "target/", ".DS_Store", ""]
+    [
+        ".env",
+        ".venv/",
+        "__pycache__/",
+        ".pytest_cache/",
+        ".ruff_cache/",
+        "node_modules/",
+        "target/",
+        ".DS_Store",
+        ".idea/",
+        ".vscode/",
+        "",
+    ]
 )
 ONBOARDER_AGENT = "onboarder"
 PROJECT_SETTINGS_FILE = Path(".claude") / "settings.json"
