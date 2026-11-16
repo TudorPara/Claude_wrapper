@@ -4,6 +4,35 @@ A running log of what went wrong in real use, why, and what was changed. Newest 
 
 ---
 
+## 2026-11-16 (evening) · A project from nothing: terminal tic-tac-toe
+
+**Why:** the first `cw new` on a real GitHub account. One request (two players, or one against a computer with easy, medium and minimax-hard levels, rematches and a session score, logic separate from the terminal, an exhaustive test that hard never loses) became a private repository, a 6-task plan for 4 workers, PR #1 and a merge. The game works when played by hand, 51 tests pass, and the logic was read and is correct.
+
+### What happened
+
+- The plan was changed three times through `cw run <ticket>` (more modular and 4 workers, then simpler, then back). Each feedback resumed the planner's session.
+- W1 built the skeleton and the rules, W2 the AI, W3 the terminal interface and game loop, W4 the README and `CLAUDE.md`. Each worker read only the files from earlier tasks it needed.
+- The review asked for 8 changes. The fix round made them, the second review asked for one rename, and `cw fix` made it from the PR comment.
+
+### Bugs found, not fixed yet
+
+| # | Symptom | Root cause |
+|---|---|---|
+| 1 | `.idea/` (PyCharm) and a stray `skills/` file reached `main`, although the fix round added both to `.gitignore` and the second review called them fixed | `git.snapshot` stages every file in git's real index. The worker's `git rm --cached` was refused (only read-only git is allowed), and `.gitignore` does not unstage files. Fix: build snapshots in a scratch index (`GIT_INDEX_FILE`) |
+| 2 | `cw merge` refused with "is ready; finish it first", and it took `cw pr` twice more to get back | `cw review` sets the ticket to `ready` even when its PR is open. Fix: a ticket with an open PR stays `pr_open` |
+| 3 | The whole app was squash-merged as "chore: add project skeleton with uv, ruff and pytest" | cw keeps the first worker's `commit_message`. Fix: the planner writes one message for the whole plan; the worker's is for the direct route |
+
+### Fixed
+
+- A new project's `.gitignore` now lists `.idea/` and `.vscode/`.
+- The stray `skills/system/run-workflow/SKILL.md` was removed from the tic-tac-toe repository and from this one, and `skills/` is ignored in both. Its origin is unknown: in tic-tac-toe it appeared ten seconds after the planner finished, and no agent session wrote it.
+
+### Measured
+
+Planner $0.82 (4 runs, because the plan changed three times), reviewer $0.71 (3 runs), worker $0.96 (8 runs): $2.49 in total.
+
+---
+
 ## 2026-11-16 (afternoon) · Second Live_FER ticket: per-face tracking, through `cw merge`
 
 **Why:** a bigger planned ticket (2 tasks, 11 files: a new face tracker and a shared analyzer for the webcam app and both backends) ran end to end, through `cw fix` and the first real `cw merge` (PR #3). The code was right; cw itself showed four bugs and one false alarm.

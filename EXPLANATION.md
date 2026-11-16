@@ -345,14 +345,23 @@ Where the savings come from: isolation from personal setup; no pasted rulebooks;
 - the review's fix round gets every finding, minor ones included; `cw stats` counts a resumed session's cost once; a file named in a task's instructions is in its scope; the worker may narrow the lint and test commands to a path but not run another script;
 - the reviewer is told about cw's notes only when the diff contains them.
 
-**Not verified, because it needs the real Claude Code or a Mac:**
-- every real agent run after these changes: `--max-turns`, `stream-json` with `--json-schema`, and resuming a worker session with `--agent`. The flags were not run here;
+**Verified on real projects with the real Claude Code (2.1.311) and GitHub, on 2026-11-16** (`CHANGES_AND_ISSUES.md` has each run):
+- three tickets: a one-file test on an existing repository (direct route), a 2-task, 11-file change to the same repository (planned route), and a project created from nothing with `cw new --github private` (6 tasks, 4 workers, 29 files);
+- real agent runs with `--max-turns`, `stream-json`, `--json-schema` and resumed worker and planner sessions, including plan feedback through `cw run <ticket>`;
+- the pull request opened and the review posted on GitHub; `cw fix` read the open threads, pushed the fix and resolved them; `cw merge` squash-merged once CI passed, deleted the branch on GitHub and fast-forwarded the local `main`;
+- the resulting tic-tac-toe game was played by hand in every mode.
+
+**Not verified:**
 - that the rules hook's message reaches the agent as intended when it reads a file (exit code 2 after a Read);
-- FRIDAY: none of the Swift changes were compiled (dictation, speech, preferences, Stop, the output fix);
-- creating a real PR and posting the review on GitHub or Bitbucket; `cw new --github`;
-- `cw fix` and `cw merge` against a real host: on GitHub, reading the threads and the checks was run against a real PR, but resolving a thread and merging were not; nothing of the Bitbucket side was run (resolving a comment is `POST …/comments/{id}/resolve`, taken from Atlassian's community answers, not from a test);
+- FRIDAY: it compiles (`swift build`), but its screens, dictation, speech and Stop were not used by hand after these changes;
+- all of the Bitbucket side: PRs, reviews, comments, CI and merging. Resolving a comment is `POST …/comments/{id}/resolve`, taken from Atlassian's community answers, not from a test;
 - usage-limit detection;
 - the links in section 17 that start with `anthropic.com/research/` may have moved to `anthropic.com/engineering/`.
+
+**Known bugs, not fixed yet** (from the tic-tac-toe ticket):
+- cw's snapshots stage every file in git's real index, so a file the worker later adds to `.gitignore` is still committed (the worker cannot run `git rm --cached`). Check the PR's file list for IDE folders and other stray files;
+- `cw review` on a ticket whose PR is open sets it back to `ready`, and `cw merge` then refuses. Run `cw pr` again, then `cw merge`;
+- a planned ticket's commit and squash-merge message is the first task's message (for example "chore: add project skeleton"), not one for the whole change. Edit it on the host if it matters.
 
 **Known limits:** one open ticket per project; no Java stack plugin; the toolkit isn't published.
 
