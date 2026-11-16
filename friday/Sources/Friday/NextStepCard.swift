@@ -104,9 +104,12 @@ struct NextStepCard: View {
                 secondary("Review only", ["review", ticket.id])
             case .blocked, .paused, .inProgress, .inReview:
                 primary("Resume", ["resume", ticket.id])
+            case .prOpen where ticket.prUrl != nil:
+                primary("Merge", ["merge", ticket.id])
+                secondary("Fix comments", ["fix", ticket.id])
+                secondary("CI status", ["ci", ticket.id])
             case .prOpen:
                 primary("Mark done", ["done", ticket.id])
-                if ticket.prUrl != nil { secondary("CI status", ["ci", ticket.id]) }
             default:
                 EmptyView()
             }

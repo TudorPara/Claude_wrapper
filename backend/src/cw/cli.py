@@ -101,7 +101,7 @@ def _report(ticket_id: str) -> None:
         "awaiting_approval": f"review the plan, then: cw approve {ticket.id}",
         "ready": f'follow up with cw run {ticket.id} "...", or review and open the PR with: cw pr {ticket.id}',
         "pr_open": (
-            f"merge {ticket.pr_url}, then: cw done {ticket.id}"
+            f"address its comments with cw fix {ticket.id}, then merge it with: cw merge {ticket.id}"
             if ticket.pr_url
             else f"look at the commit on {ticket.branch}, then merge it with: cw done {ticket.id}"
         ),
@@ -208,6 +208,8 @@ def _parser() -> argparse.ArgumentParser:
         ("resume", "re-run the step that paused, blocked or was stopped", pipeline.resume),
         ("review", "run the checks and the reviewer on the change; nothing is committed", pipeline.review),
         ("pr", "review the change, commit it once, push and open the pull request", pipeline.open_pull_request),
+        ("fix", "let the worker address the pull request's open comments, then push", pipeline.fix_pull_request),
+        ("merge", "squash-merge the pull request once CI passed, then close the ticket", pipeline.merge_pull_request),
     ):
         command = commands.add_parser(name, help=help_text)
         command.add_argument("ticket")

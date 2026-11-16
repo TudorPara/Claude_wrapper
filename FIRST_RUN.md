@@ -148,6 +148,20 @@ cw status
 cw pr <ticket-id>
 ```
 
+When the PR has comments, from the reviewer agent or from people, let the worker address them and push the fix:
+
+```bash
+cw fix <ticket-id>
+```
+
+Squash-merge once CI passed and no blocking finding is left; this also closes the ticket and deletes its branch:
+
+```bash
+cw merge <ticket-id>
+```
+
+Or merge on GitHub/Bitbucket yourself, then close the ticket:
+
 ```bash
 cw done <ticket-id>
 ```

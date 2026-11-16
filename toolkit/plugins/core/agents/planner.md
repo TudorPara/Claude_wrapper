@@ -32,7 +32,7 @@ Each task goes to a separate worker that starts fresh. It sees the request, your
   1. What to build: the files, functions, classes and endpoints, by name.
   2. What it must expose for later tasks (names, signatures, routes) and what it can rely on from earlier tasks.
   3. What is out of scope, where a worker could reasonably do too much.
-  4. A last line starting with `Done when:` that the worker can check, such as a command that passes or a behaviour that works.
+  4. A last line starting with `Done when:` that the worker can check with the project's lint and test commands (the only commands it may run, besides read-only git), such as a test that passes.
 - **`files` lists exactly the files the task creates or changes.** Keep each file in one task. When two tasks must touch the same file, say in the later task what the earlier one left there.
 - **`worker` says who does it**: `W1`, `W2`, ... up to the number in your prompt. Workers take turns in the order of your list. A worker keeps what it has read between its own tasks, so give related tasks (the same files, layer or feature) to the same worker, and use another worker only for an unrelated area. Most plans need one or two workers.
 - **Order the tasks so the project works after each one**: lint and tests pass at every step.

@@ -95,13 +95,19 @@ checks (only those that passed on the base; after each task, or once after a dir
 you: cw pr
  │
  ▼
-reviewer (read-only, strict, always) ─ blocking findings? ─► one fix round, re-review only the new diff
+reviewer (read-only, strict, always) ─ blocking findings? ─► one fix round on every finding, re-review only the new diff
  │
  ▼
 cw: one commit → merge base (conflicts → worker, once) → push → open PR → post the review on it
  │        no remote: stops after the commit; cw done merges the branch into the base
  ▼
-you merge on GitHub/Bitbucket → cw done → cw switches you back to your previous branch
+you or teammates comment on the PR → cw fix: the last worker addresses every open line comment
+ │        (the reviewer agent's and people's) → checks → review → a new commit pushed → its summary
+ │        posted on the PR → those threads resolved
+ ▼
+you: cw merge → refused while CI has not passed or a blocking finding is left → squash-merge on
+         GitHub/Bitbucket, branch deleted there and locally → you are back on your previous branch
+         (or merge on the host yourself, then cw done)
 ```
 
 **Key properties:**
@@ -110,7 +116,9 @@ you merge on GitHub/Bitbucket → cw done → cw switches you back to your previ
 - **Workers take turns; nothing runs in parallel.** The planner gives each task to a worker (`W1`, `W2`, … up to `max_workers`). A worker keeps one session for all its tasks, so related tasks reuse what it has already read instead of paying for a new session and re-reading the project. A different worker is for an unrelated area. All of them edit the same checkout, one after another, so there are no conflicts between them.
 - **A small request is one worker run.** There is no cheaper unit: cw has no model of its own. Follow-ups, fixes and answers continue in that worker's session.
 - **Nothing is committed or pushed until `cw pr`.** Then exactly one commit is made.
-- **The review cannot be skipped.** `cw pr` always reviews first and then opens the PR. Findings left after the fix round are on the PR and on the ticket; you decide what to do with them. `cw review` runs the same review alone.
+- **The review cannot be skipped.** `cw pr` always reviews first and then opens the PR. Findings left after the fix round are on the PR and on the ticket; you decide what to do with them. `cw review` runs the same review alone. The reviewer is told that the "Notes kept by cw" section of `CLAUDE.md` ships on purpose, whenever the diff contains it.
+- **PR comments are worked off with `cw fix`.** It reads the open (unresolved) comment threads on lines of the PR, from the reviewer agent and from people, gives them to the last worker in one instruction, then runs the same steps as `cw pr`: checks, review, a new commit, push. It posts the worker's summary on the PR, which says why a comment needed no change, and resolves the threads it sent. Comments in the PR's general conversation are not read. Each `cw fix` is one pass; run it again for new comments.
+- **`cw merge` squash-merges, and only when it is safe.** It refuses while the PR's CI has not passed (a PR without checks passes), while cw's last review left a blocking finding, or while the checkout has uncommitted changes on the ticket's branch. Then it squash-merges on the host with the ticket's commit message, deletes the branch there, fast-forwards your local base branch to the host's (a warning if it has diverged), deletes the local branch, and closes the ticket like `cw done`.
 - **Every repeat is capped** by config: fix rounds, review rounds, question rounds and conflict rounds default to 1, every agent has a turn cap and a time limit. Nothing loops by itself.
 - **A stop is never final.** Ctrl+C, FRIDAY's Stop, an error, a time limit or the usage limit leave the ticket blocked or paused with the step recorded; `cw resume` continues, and a task list continues at the first unfinished task.
 
@@ -152,7 +160,7 @@ The `.md` holds, in this order: the request (all your prompts), questions and an
 
 ### What cw checks instead of trusting, and what it remembers
 
-- **git decides what a worker changed.** cw snapshots the tree before and after every worker run; the ticket's `Files:` line is git's list, not the worker's. A worker that says `done` but changed nothing gets a `No changes:` warning, and a task that changed files outside its planned list gets a `Scope: S<n>:` warning (one per task).
+- **git decides what a worker changed.** cw snapshots the tree before and after every worker run; the ticket's `Files:` line is git's list, not the worker's. A worker that says `done` but changed nothing gets a `No changes:` warning, and a task that changed files outside its planned list, and not named in its instructions either, gets a `Scope: S<n>:` warning (one per task).
 - **The checks run after every task**, so a broken step is fixed before the next task builds on it.
 - **Worker sessions have a size limit.** When a run's average turn passes 45k tokens (cached and uncached together), that worker starts a fresh session next time, seeded from the ticket.
 - **Older tasks are shortened in a worker's view**: their summary is dropped, but their files and handoff stay, because later tasks build on them. The ticket's `.md` keeps everything.
@@ -198,11 +206,11 @@ The Python rulebook used to be one 500-line file that, after the first token fix
 ## 9. Permissions, safety, external plugins and MCP
 
 - **Protected paths** (default `**/*.key`, `**/*.pem`, `**/secrets/**`) become `Read/Edit/Write` deny rules in every run, plus the guard hook for shell commands. `.env` is not on the list: agents may open and update it when a task adds or changes a setting. Whatever is in it is then sent to the model and kept in the run's transcript, so keep production secrets out of it, or add `.env` to a project's protected paths.
-- **Worker shell commands.** The worker runs with `acceptEdits`. Bash is pre-allowed only for the project's lint and test commands, read-only git and `extra_allowed_bash`; anything else is denied in headless mode.
+- **Worker shell commands.** The worker runs with `acceptEdits`. Bash is pre-allowed only for the project's lint and test commands (also narrowed: cw drops the command's trailing folder arguments, so `ruff check src tests` also allows `ruff check <any path>`; a trailing file, which may be the script itself, is never dropped), `head` and `tail` for piping their output, read-only git and `extra_allowed_bash`; anything else is denied in headless mode. The worker's prompt says so, and the planner writes `Done when:` with only those commands.
 - **Read-only agents.** Planner, reviewer and onboarder have no write tools.
 - **Secrets.** The Bitbucket token comes only from the environment and is removed from the environment agents run in.
 - **Your work is protected.** cw refuses to start or switch tickets when your checkout has uncommitted changes, and **Abandon** is only offered for that ticket's own branch.
-- **Two human checkpoints:** you approve plans, and you merge PRs. cw never merges a PR.
+- **Two human checkpoints:** you approve plans, and you merge PRs. cw merges only when you run `cw merge`, never by itself.
 
 | External plugin | Marketplace | Why |
 |---|---|---|
@@ -296,7 +304,7 @@ What the 2026-11-13 changes do to these numbers has **not been measured yet**:
 - A worker session is reused for related tasks, follow-ups, fixes and answers, instead of a new session that re-reads the project each time. A reused session grows with every task, which is why the planner gives a worker only related tasks.
 - A resumed worker is sent only what is new.
 
-Measure it on your own tickets with `cw stats` and `cw show <id> --json` (`runs`: tokens, turns and cost per run).
+Measure it on your own tickets with `cw stats` and `cw show <id> --json` (`runs`: tokens and turns per run). A run's `cost_usd` is what Claude Code reports, which for a resumed session is the session's total so far; `cw stats` subtracts the session's previous run, so each run is counted once.
 
 Where the savings come from: isolation from personal setup; no pasted rulebooks; no router agent; deterministic checks before any reviewer; failures that already exist on the base are ignored; one reviewer, re-reviewing only the new diff; caps on every loop; workers that take turns and keep their session.
 
@@ -322,7 +330,7 @@ Where the savings come from: isolation from personal setup; no pasted rulebooks;
 
 ## 16. Verified, and not verified
 
-**Verified by tests that run the real cw code with a stand-in for `claude`** (`cd backend && uv run pytest`, 58 tests):
+**Verified by tests that run the real cw code with a stand-in for `claude`** (`cd backend && uv run pytest`, 81 tests):
 - a project created from an idea, planned, approved, built in two tasks, reviewed, committed once and merged by `cw done`, through the command line;
 - related tasks continue one worker session, another worker gets a new one and is told what happened;
 - a worker's question is answered by the planner; one the planner cannot answer goes to you and your reply reaches the worker;
@@ -331,13 +339,18 @@ Where the savings come from: isolation from personal setup; no pasted rulebooks;
 - merge conflicts with the base are resolved and committed; a later review does not include the base's changes;
 - the PR is opened after the review even when findings are left; `cw review` commits nothing; a ticket from `--base develop` targets `develop`;
 - a check the ticket broke gets one fix round and is then reported; a ticket without changes cannot open a PR; files the checks leave behind are reported;
-- the guard, the rules hook and the topic index; time limits kill a command and everything it started.
+- the guard, the rules hook and the topic index; time limits kill a command and everything it started;
+- `cw fix` sends the open PR threads to the last worker, pushes a second commit, posts the worker's summary and resolves the threads; with no open threads it runs no agent;
+- `cw merge` refuses while a blocking finding is left or CI has not passed, and otherwise merges, fast-forwards the local base branch, closes the ticket and deletes the local branch;
+- the review's fix round gets every finding, minor ones included; `cw stats` counts a resumed session's cost once; a file named in a task's instructions is in its scope; the worker may narrow the lint and test commands to a path but not run another script;
+- the reviewer is told about cw's notes only when the diff contains them.
 
 **Not verified, because it needs the real Claude Code or a Mac:**
 - every real agent run after these changes: `--max-turns`, `stream-json` with `--json-schema`, and resuming a worker session with `--agent`. The flags were not run here;
 - that the rules hook's message reaches the agent as intended when it reads a file (exit code 2 after a Read);
 - FRIDAY: none of the Swift changes were compiled (dictation, speech, preferences, Stop, the output fix);
 - creating a real PR and posting the review on GitHub or Bitbucket; `cw new --github`;
+- `cw fix` and `cw merge` against a real host: on GitHub, reading the threads and the checks was run against a real PR, but resolving a thread and merging were not; nothing of the Bitbucket side was run (resolving a comment is `POST …/comments/{id}/resolve`, taken from Atlassian's community answers, not from a test);
 - usage-limit detection;
 - the links in section 17 that start with `anthropic.com/research/` may have moved to `anthropic.com/engineering/`.
 

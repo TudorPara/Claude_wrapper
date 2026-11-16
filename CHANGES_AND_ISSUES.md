@@ -4,6 +4,62 @@ A running log of what went wrong in real use, why, and what was changed. Newest 
 
 ---
 
+## 2026-11-16 (afternoon) · Second Live_FER ticket: per-face tracking, through `cw merge`
+
+**Why:** a bigger planned ticket (2 tasks, 11 files: a new face tracker and a shared analyzer for the webcam app and both backends) ran end to end, through `cw fix` and the first real `cw merge` (PR #3). The code was right; cw itself showed four bugs and one false alarm.
+
+| # | Symptom | Root cause | Fix |
+|---|---|---|---|
+| 1 | Review 1 had 2 blocking and 3 minor findings; review 2 called the 3 minors "still not fixed" and made them blocking, which cost an extra `cw fix` run | the fix round sent the worker only the blocking findings, but the reviewer was asked to check all its previous findings | the fix round sends every finding, each with its severity |
+| 2 | `cw stats` showed $1.76 for the worker; it had spent about $0.57 | Claude Code's `total_cost_usd` is the session's total so far when a session is resumed (checked with two Haiku calls: the resumed one reported the first one's cost plus its own) | `cw stats` subtracts the session's previous run; existing tickets are corrected too |
+| 3 | After `cw merge`, the local `main` did not have the merge | cw merged on the host but never updated the local branch, and the repo map was then written from the old code | `cw merge` fast-forwards the local base branch before closing the ticket; a diverged branch gets a warning |
+| 4 | The worker never ran ruff, and about 6 turns went to refused commands | only the exact lint and test commands were allowed (`ruff check src tests` is not `ruff check src scripts tests`), nothing could be piped into `tail`, and the planner wrote a `Done when:` with `python -c` | trailing folder arguments are dropped from the allowed commands, `head` and `tail` are allowed, the worker's prompt says what it may run, and the planner writes `Done when:` with those commands only |
+| 5 | "Scope: S2 changed files outside its task: analyzer.py", though S2's instructions allowed it | the planner named the file in the instructions but not in `files` | a file named in the task's instructions is in scope |
+
+### Found, not fixed
+
+- **The worker edits one place per call.** S2 used 40 turns, exactly the worker's cap: 14 Edits for the two backends after a scripted rewrite was refused, and 4 Edits that failed because edits it sent together overlapped. Every turn re-reads the session from cache (460k cached tokens).
+- **One analyzer is shared by every websocket client** in Live_FER, as the predictor was before; per-connection analyzers were out of the plan's scope.
+- Nobody ran the Live_FER backend or webcam app: `fastapi` is not in its `.venv`, and there is no checkpoint.
+
+### Measured
+
+Planner $0.36 (1 run), reviewer $0.55 (3 runs), worker about $0.56 (4 runs in one session), so about $1.47. The worker read only the files the plan named.
+
+---
+
+## 2026-11-16 · First real ticket on Live_FER; `cw fix` and `cw merge`
+
+**Why:** the first real ticket (`emotion`, "add a test that ResNetFER rejects an input with 3 channels", Haiku for every role) opened PR #2 with a blocking finding nobody could fix, and the PR's comments had no way back to a worker.
+
+### What the ticket showed
+
+| # | Symptom | Root cause | Fix |
+|---|---|---|---|
+| 1 | The reviewer flagged `CLAUDE.md` as "blocking, outside the task"; the fix round changed nothing, so there was no second review and the PR opened with "1 blocking finding left" | nothing told the reviewer that cw writes the "Notes kept by cw" section on purpose | the reviewer's prompt explains the section whenever the diff contains it; a note is flagged only if it is wrong |
+| 2 | PR comments, the agent's and people's, could only be fixed by hand or by retyping them into `cw run` | cw posted comments but never read them back | `cw fix <id>`: open line threads → last worker → checks, review, new commit, push → the worker's summary posted → threads resolved |
+| 3 | Merging needed the host's web page, then `cw done` | cw had no merge step | `cw merge <id>`: refuses while CI has not passed or a blocking finding is left, then squash-merges, deletes the branch on the host and locally, closes the ticket |
+
+### Found, not fixed yet
+
+- **Fixed later the same day:** **The worker's `ruff check` was refused.** The worker may only run commands that start with the configured lint command (`.venv/bin/ruff check src scripts tests`). It ran `.venv/bin/ruff check tests/test_model.py`, chained after `;`. Lint is also not enforced in Live_FER, because it already fails on `main`.
+- **Fixed later the same day:** **Minor findings are never sent back by `cw pr`.** Only blocking findings get a fix round, by design. `cw fix` now covers them, because the reviewer's minor comments are threads on the PR too.
+- **A resumed planner gets the whole request and the repo map again** when you give feedback on a plan. Its session already has them.
+- **Running `cw done` before merging closes the ticket.** Follow-ups are refused after that; `cw merge` avoids the order problem.
+
+### Measured on that ticket
+
+Three runs (worker, reviewer, worker fix round), $0.015 in total with Haiku. The worker ran 2 greps, read 2 files, and averaged about 8.4k tokens of context per turn over 13 turns: it did not read the codebase.
+
+### Verified, and not verified
+
+- 78 tests pass; ruff check and format are clean.
+- The new GitHub code read the open threads and the checks of the real PR #2 correctly.
+- Not run against a real host: resolving a thread and merging on GitHub, and all of the Bitbucket side. Bitbucket's resolve call (`POST …/comments/{id}/resolve`) comes from Atlassian's community answers, not from a test.
+- The `emotion` project is back on opus (planner, reviewer) and sonnet (worker, onboarder).
+
+---
+
 ## 2026-11-13 (evening) · Checking the scaling changes, and the project's CLAUDE.md as memory
 
 **Why:** a review of the "Architecture scaling" changes below. Some of them did not do what that entry says, and you decided that cross-ticket memory should be the project's own `CLAUDE.md`, not a knowledge graph.

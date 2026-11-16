@@ -29,13 +29,16 @@ def usage_stats(settings: Settings) -> list[dict]:
     )
     for path in ticket_paths():
         ticket = read_ticket(path)
+        session_spent: dict[str, float] = {}
         for run in ticket.runs:
             total = totals[(ticket.project, run.role)]
+            total["cost_usd"] += run.cost_usd - session_spent.get(run.session_id, 0.0)
+            if run.session_id:
+                session_spent[run.session_id] = run.cost_usd
             total["runs"] += 1
             total["input_tokens"] += run.input_tokens + run.cache_creation_tokens
             total["output_tokens"] += run.output_tokens
             total["cache_read_tokens"] += run.cache_read_tokens
-            total["cost_usd"] += run.cost_usd
     return [{"project": project, "role": role, **values} for (project, role), values in sorted(totals.items())]
 
 

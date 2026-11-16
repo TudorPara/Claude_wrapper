@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 from cw.errors import AppErrorCode, AppException
-from cw.git_hosts.base import PullRequest
+from cw.git_hosts.base import PullRequest, PullRequestThread
 from cw.models import ReviewComment
 
 logger = logging.getLogger(__name__)
@@ -14,6 +14,18 @@ logger = logging.getLogger(__name__)
 REVIEW_EVENT = "COMMENT"
 NEW_SIDE = "RIGHT"
 UNPROCESSABLE_HINT = "422"
+NO_CHECKS_HINT = "no checks reported"
+PASSED_BUCKETS = {"pass", "skipping"}
+SQUASH = "squash"
+GHOST_AUTHOR = "ghost"
+MAX_THREADS = 100
+MAX_THREAD_COMMENTS = 20
+THREADS_QUERY = (
+    "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { "
+    f"pullRequest(number: $number) {{ reviewThreads(first: {MAX_THREADS}) {{ nodes {{ id isResolved path line "
+    f"originalLine comments(first: {MAX_THREAD_COMMENTS}) {{ nodes {{ body author {{ login }} }} }} }} }} }} }} }}"
+)
+RESOLVE_MUTATION = "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { id } } }"
 
 
 class GitHubHost:
@@ -62,3 +74,67 @@ class GitHubHost:
         """Return the checks table gh prints for the pull request."""
         result = subprocess.run(["gh", "pr", "checks", str(number)], cwd=self._checkout, capture_output=True, text=True)
         return (result.stdout or result.stderr).strip() or "No checks reported."
+
+    def ci_passed(self, number: int, sha: str) -> bool:
+        """Return whether every check passed or was skipped; gh's exit code also flags pending checks, so read JSON."""
+        command = ["gh", "pr", "checks", str(number), "--json", "bucket"]
+        result = subprocess.run(command, cwd=self._checkout, capture_output=True, text=True)
+        if NO_CHECKS_HINT in result.stderr:
+            return True
+        try:
+            checks = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            logger.error("gh pr checks failed: %s", result.stderr.strip())
+            raise AppException(AppErrorCode.GIT_HOST_FAILED, result.stderr.strip()) from error
+        return all(check["bucket"] in PASSED_BUCKETS for check in checks)
+
+    def open_threads(self, number: int) -> list[PullRequestThread]:
+        """Return the unresolved review threads, each comment prefixed with its author."""
+        owner, name = self._repository().split("/")
+        data = json.loads(
+            self._gh(
+                "api",
+                "graphql",
+                "-f",
+                f"query={THREADS_QUERY}",
+                "-f",
+                f"owner={owner}",
+                "-f",
+                f"name={name}",
+                "-F",
+                f"number={number}",
+            )
+        )
+        threads = data["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+        return [
+            PullRequestThread(
+                id=thread["id"],
+                path=thread["path"],
+                line=thread["line"] or thread["originalLine"] or 0,
+                body="\n".join(
+                    f"{(comment['author'] or {}).get('login', GHOST_AUTHOR)}: {comment['body']}"
+                    for comment in thread["comments"]["nodes"]
+                ),
+            )
+            for thread in threads
+            if not thread["isResolved"]
+        ]
+
+    def resolve_thread(self, number: int, thread_id: str) -> None:
+        """Resolve a review thread."""
+        self._gh("api", "graphql", "-f", f"query={RESOLVE_MUTATION}", "-f", f"id={thread_id}")
+
+    def merge(self, number: int, branch: str, message: str) -> None:
+        """Squash-merge through the API, then delete the branch on GitHub; the local checkout is left to cw."""
+        repository = self._repository()
+        self._gh(
+            "api",
+            "--method",
+            "PUT",
+            f"repos/{repository}/pulls/{number}/merge",
+            "-f",
+            f"merge_method={SQUASH}",
+            "-f",
+            f"commit_title={message}",
+        )
+        self._gh("api", "--method", "DELETE", f"repos/{repository}/git/refs/heads/{branch}")

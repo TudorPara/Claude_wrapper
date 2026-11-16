@@ -120,3 +120,17 @@ def test_a_review_gets_the_rules_that_cover_the_changed_files(workspace: Path) -
     for heading in ("## Skill core:pr-review", "## 14. PR and git discipline", "## 6. Layers", "## 12. Migrations"):
         assert heading in rules
     assert "## 13. Providers, agents and graphs" not in rules
+
+
+def test_a_worker_may_narrow_the_checks_to_a_path_but_not_run_any_script(workspace: Path) -> None:
+    repository = make_repository(workspace, with_remote=False)
+    (repository / "tests").mkdir()
+    settings = get_settings()
+    project = settings.project("demo")
+    project.commands.lint = ".venv/bin/ruff check tests"
+    project.commands.test = "python run_tests.py"
+    allow = claude_runner._run_settings(settings, project, AgentRole.WORKER)["permissions"]["allow"]
+    assert "Bash(.venv/bin/ruff check:*)" in allow and "Bash(.venv/bin/ruff check tests:*)" in allow
+    assert "Bash(python run_tests.py:*)" in allow and "Bash(python:*)" not in allow
+    assert "Bash(tail:*)" in allow
+    assert claude_runner._run_settings(settings, project, AgentRole.REVIEWER)["permissions"]["allow"] == []

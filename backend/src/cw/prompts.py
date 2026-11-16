@@ -6,7 +6,9 @@ A worker that already has a session only gets what changed since its last turn, 
 """
 
 from cw.config import Limits, Project, repo_map_path
+from cw.git_hosts.base import PullRequestThread
 from cw.models import QuestionEntry, ReviewComment, ReviewEntry, Subtask, Ticket
+from cw.project_memory import NOTES_HEADING
 from cw.tickets import ticket_markdown, work_record
 
 
@@ -44,7 +46,10 @@ def _checks(project: Project, ticket: Ticket) -> str:
         lines.append(f"- {name}: `{command}` ({note})")
     if not lines:
         return ""
-    return "## Checks\n\ncw runs these when the work is finished. Run them yourself first.\n\n" + "\n".join(lines)
+    return (
+        "## Checks\n\ncw runs these when the work is finished. Run them yourself first. You may narrow one to a file "
+        "or folder and pipe it into `head` or `tail`; any other shell command is refused.\n\n" + "\n".join(lines)
+    )
 
 
 def _check_results(project: Project, ticket: Ticket) -> str:
@@ -142,11 +147,21 @@ def fix_checks_instruction(failures: list[tuple[str, str]]) -> str:
 
 
 def fix_review_instruction(comments: list[ReviewComment]) -> str:
-    """Return the instruction to address blocking review comments."""
-    findings = "\n".join(f"- `{c.path}:{c.line}` {c.body}" for c in comments)
+    """Return the instruction to address every review finding, minor ones included: the reviewer checks them all."""
+    findings = "\n".join(f"- `{c.path}:{c.line}` ({c.severity}) {c.body}" for c in comments)
     return (
         "## Address these review findings, and only these\n\n"
         f"{findings}\n\nDecide yourself: questions are not possible here."
+    )
+
+
+def pull_request_comments_instruction(threads: list[PullRequestThread]) -> str:
+    """Return the instruction to address the open comments on the pull request, from the reviewer and from people."""
+    findings = "\n".join(f"- `{t.path}:{t.line}`\n  {t.body.replace(chr(10), chr(10) + '  ')}" for t in threads)
+    return (
+        "## Address these pull request comments\n\nThe reviewer agent and people left these on the pull request. "
+        f"Address every one.\n\n{findings}\n\nWhere a comment needs no change, say why in `summary`, one line per "
+        "comment: cw posts your summary on the pull request. Decide yourself: questions are not possible here."
     )
 
 
@@ -246,12 +261,20 @@ def reviewer_prompt(project: Project, ticket: Ticket, diff: str, truncated: bool
     if previous:
         findings = "\n".join(f"- `{c.path}:{c.line}` {c.body}" for entry in previous for c in entry.comments)
         earlier = f"## Your previous findings (check each is fixed)\n\n{findings}"
+    memory = (
+        f"## cw's project notes\n\nThe section `{NOTES_HEADING}` in CLAUDE.md is written by cw from the workers' "
+        "`project_notes` and ships with every change on purpose. It is not outside the task: flag a note only if "
+        "it is wrong or not a lasting fact."
+        if NOTES_HEADING in diff
+        else ""
+    )
     return _join(
         _request(ticket),
         _plan(ticket),
         worker_notes,
         _check_results(project, ticket),
         earlier,
+        memory,
         f"## Diff to review{note}\n\n```diff\n{diff}\n```",
     )
 

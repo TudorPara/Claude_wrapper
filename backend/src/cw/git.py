@@ -54,6 +54,15 @@ def fetch_base(path: Path, remote: str, base_branch: str) -> tuple[str, str]:
     return f"{remote}/{base_branch}", ""
 
 
+def fast_forward(cwd: Path, remote: str, branch: str) -> bool:
+    """Move the local branch to the remote's copy if that needs no merge; return whether it is up to date now."""
+    if current_branch(cwd) == branch:
+        command = ["git", "pull", "--ff-only", remote, branch]
+    else:
+        command = ["git", "fetch", remote, f"{branch}:{branch}"]
+    return subprocess.run(command, cwd=cwd, capture_output=True, text=True).returncode == 0
+
+
 def is_clean(cwd: Path) -> bool:
     """Return whether the checkout has no uncommitted or untracked changes."""
     return not git(cwd, "status", "--porcelain")

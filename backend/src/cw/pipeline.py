@@ -283,8 +283,12 @@ def _worker(
             f"{EMPTY_WARNING} {label}:",
             f"worker {worker} reported done but changed no files." if empty else None,
         )
-        planned = next((subtask.files for subtask in ticket.subtasks if subtask.id == task), []) if task else []
-        unexpected = sorted(set(actual_files) - set(planned)) if planned else []
+        subtask = next((subtask for subtask in ticket.subtasks if subtask.id == task), None) if task else None
+        unexpected = (
+            sorted(f for f in actual_files if f not in subtask.files and f not in subtask.instructions)
+            if subtask and subtask.files
+            else []
+        )
         _set_warning(
             ticket,
             f"{SCOPE_WARNING} {label}:",
@@ -378,9 +382,9 @@ def _work_on(
     return result
 
 
-def _fix(settings: Settings, project: Project, ticket: Ticket, instruction: str) -> None:
-    """Send a fix (failing checks, review findings, conflicts) to the worker that worked last."""
-    _worker(settings, project, ticket, ticket.last_worker or FIRST_WORKER, instruction, None)
+def _fix(settings: Settings, project: Project, ticket: Ticket, instruction: str) -> WorkerResult:
+    """Send a fix (failing checks, review findings, pull request comments, conflicts) to the worker that worked last."""
+    return _worker(settings, project, ticket, ticket.last_worker or FIRST_WORKER, instruction, None)
 
 
 def _checks_with_fixes(settings: Settings, project: Project, ticket: Ticket) -> None:
@@ -632,15 +636,14 @@ def _last_round(ticket: Ticket) -> list[ReviewEntry]:
     return [entry for entry in ticket.reviews if entry.round == latest]
 
 
+def _findings(entries: list[ReviewEntry]) -> list:
+    """Return every finding of the reviews that asked for changes."""
+    return [comment for entry in entries if entry.verdict == Verdict.CHANGES for comment in entry.comments]
+
+
 def _blocking(entries: list[ReviewEntry]) -> list:
     """Return the blocking findings of reviews that asked for changes."""
-    return [
-        comment
-        for entry in entries
-        if entry.verdict == Verdict.CHANGES
-        for comment in entry.comments
-        if comment.severity == Severity.BLOCKING
-    ]
+    return [comment for comment in _findings(entries) if comment.severity == Severity.BLOCKING]
 
 
 def _review(settings: Settings, project: Project, ticket: Ticket) -> None:
@@ -685,7 +688,7 @@ def _review(settings: Settings, project: Project, ticket: Ticket) -> None:
         if not blocking or round_index == limits.max_review_rounds:
             break
         logger.info("Reviewer asked for changes; fix round %s of %s.", round_index + 1, limits.max_review_rounds)
-        _fix(settings, project, ticket, prompts.fix_review_instruction(blocking))
+        _fix(settings, project, ticket, prompts.fix_review_instruction(_findings(_last_round(ticket))))
         _checks_with_fixes(settings, project, ticket)
     left = len(_blocking(_last_round(ticket)))
     _set_warning(ticket, REVIEW_WARNING, f"{left} blocking findings left after the fix round." if left else None)
@@ -743,6 +746,11 @@ def _review_only(settings: Settings, project: Project, ticket: Ticket) -> None:
     ticket.status = TicketStatus.READY
 
 
+def _commit_message(ticket: Ticket) -> str:
+    """Return the message of the ticket's one commit, and of its squash merge."""
+    return ticket.commit_message or f"feat: {ticket.title}"
+
+
 def _open_pull_request(settings: Settings, project: Project, ticket: Ticket) -> None:
     """Check and review the change, commit it as one commit, then push and open the pull request.
 
@@ -756,7 +764,7 @@ def _open_pull_request(settings: Settings, project: Project, ticket: Ticket) -> 
     save_ticket(ticket)
     _checks_with_fixes(settings, project, ticket)
     _review(settings, project, ticket)
-    message = ticket.commit_message or f"feat: {ticket.title}"
+    message = _commit_message(ticket)
     if ticket.pushed_at is None and not git.has_merge_commits(checkout, ticket.base_sha):
         git.squash_onto(checkout, ticket.base_sha, message)
     else:
@@ -808,6 +816,68 @@ def open_pull_request(ticket_id: str) -> Ticket:
     settings, project, ticket = _for_review(ticket_id)
     _guarded(project, ticket, Step.PR, lambda: _open_pull_request(settings, project, ticket))
     return ticket
+
+
+def _open_pull_request_of(ticket_id: str) -> tuple[Settings, Project, Ticket]:
+    """Return a ticket that has an open pull request, with its settings and project."""
+    ticket = find_ticket(ticket_id)
+    if ticket.pr_number is None or ticket.status in CLOSED_STATUSES:
+        raise AppException(AppErrorCode.INVALID_STATE, f"{ticket.id} has no open pull request.")
+    settings, project, _ = _context(ticket)
+    return settings, project, ticket
+
+
+def _fix_pull_request(settings: Settings, project: Project, ticket: Ticket) -> None:
+    """Have the last worker address the open comments, push the fix the way `cw pr` does, then resolve them."""
+    host = setup_git_host(settings, project, project.path)
+    threads = host.open_threads(ticket.pr_number)
+    if not threads:
+        logger.info("No open comments on %s.", ticket.pr_url)
+        return
+    logger.info("%s open comment(s) on %s go to worker %s.", len(threads), ticket.pr_url, ticket.last_worker)
+    result = _fix(settings, project, ticket, prompts.pull_request_comments_instruction(threads))
+    _open_pull_request(settings, project, ticket)
+    host.post_review(ticket.pr_number, f"**{ticket.last_worker}** · {len(threads)} comment(s)\n\n{result.summary}", [])
+    for thread in threads:
+        host.resolve_thread(ticket.pr_number, thread.id)
+
+
+def fix_pull_request(ticket_id: str) -> Ticket:
+    """Address the pull request's open comments, from the reviewer agent and from people, and push the fix."""
+    settings, project, ticket = _open_pull_request_of(ticket_id)
+    _guarded(project, ticket, Step.PR, lambda: _fix_pull_request(settings, project, ticket))
+    return ticket
+
+
+def merge_pull_request(ticket_id: str) -> Ticket:
+    """Squash-merge the pull request once its CI passed and no blocking finding is left, then close the ticket."""
+    settings, project, ticket = _open_pull_request_of(ticket_id)
+    checkout = project.path
+    if ticket.status != TicketStatus.PR_OPEN:
+        raise AppException(AppErrorCode.INVALID_STATE, f"{ticket.id} is {ticket.status}; finish it first.")
+    if is_running(ticket):
+        raise AppException(AppErrorCode.TICKET_BUSY, ticket.id)
+    if git.current_branch(checkout) == ticket.branch and not git.is_clean(checkout):
+        raise AppException(AppErrorCode.INVALID_STATE, f"{ticket.branch} has uncommitted changes.")
+    left = _blocking(_last_round(ticket))
+    if left:
+        raise AppException(
+            AppErrorCode.INVALID_STATE,
+            f"{len(left)} blocking review finding(s) left: cw fix {ticket.id}, or merge on the host yourself.",
+        )
+    host = setup_git_host(settings, project, checkout)
+    if not host.ci_passed(ticket.pr_number, git.git(checkout, "rev-parse", ticket.branch)):
+        raise AppException(AppErrorCode.INVALID_STATE, f"CI has not passed on {ticket.pr_url}: cw ci {ticket.id}.")
+    target = _target(project, ticket)
+    host.merge(ticket.pr_number, ticket.branch, _commit_message(ticket))
+    logger.info("Merged %s into %s.", ticket.pr_url, target)
+    if not git.fast_forward(checkout, project.remote, target):
+        logger.warning(
+            "Your local %s could not be fast-forwarded to %s/%s; pull it yourself.", target, project.remote, target
+        )
+    finish(ticket.id, abandon=False)
+    git.delete_branch(checkout, ticket.branch)
+    return find_ticket(ticket.id)
 
 
 def _step_to_resume(ticket: Ticket) -> Step | None:

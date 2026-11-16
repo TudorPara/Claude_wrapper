@@ -3,9 +3,10 @@ from pathlib import Path
 import pytest
 from conftest import FakeAgents, FakeHost, answer, git, make_repository, usage
 
-from cw import onboarding, pipeline
+from cw import onboarding, pipeline, reports
 from cw.config import AgentRole, get_settings, save_settings
 from cw.errors import AppErrorCode, AppException
+from cw.git_hosts.base import PullRequestThread
 from cw.models import ReviewComment, ReviewerResult, Severity, Step, TicketStatus, Verdict, WorkerResult, WorkerStatus
 from cw.tickets import find_ticket, save_ticket, ticket_path
 
@@ -262,13 +263,16 @@ def test_the_pull_request_is_opened_after_the_review_even_when_findings_are_left
     remote_repository: Path, agents: FakeAgents, host: FakeHost
 ) -> None:
     finding = ReviewComment(path="work_1.txt", line=1, severity=Severity.BLOCKING, body="wrong")
-    agents.reviewer = lambda prompt: ReviewerResult(verdict=Verdict.CHANGES, summary="no", comments=[finding])
+    nit = ReviewComment(path="work_1.txt", line=2, severity=Severity.MINOR, body="rename it")
+    agents.reviewer = lambda prompt: ReviewerResult(verdict=Verdict.CHANGES, summary="no", comments=[finding, nit])
     ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
     opened = pipeline.open_pull_request(ticket.id)
     assert opened.status == TicketStatus.PR_OPEN and opened.pr_number == 1
     assert "Review: 1 blocking findings left after the fix round." in opened.warnings
     assert len(agents.prompts_for(AgentRole.REVIEWER)) == 2 and host.reviews == 1
-    assert agents.prompts_for(WORKER)[1].startswith("## Address these review findings, and only these")
+    fix_prompt = agents.prompts_for(WORKER)[1]
+    assert fix_prompt.startswith("## Address these review findings, and only these")
+    assert "(blocking) wrong" in fix_prompt and "(minor) rename it" in fix_prompt
 
 
 def test_a_ticket_can_start_from_another_branch_and_its_pull_request_goes_back_there(
@@ -363,6 +367,24 @@ def test_a_task_that_changes_files_outside_its_list_is_flagged(local_repository:
     assert not any(warning.startswith("Scope: S2") for warning in done.warnings)
 
 
+def test_a_file_the_task_instructions_name_is_in_scope(local_repository: Path, agents: FakeAgents) -> None:
+    ticket = pipeline.start_ticket("demo", "two steps", plan_first=True)
+    ticket.subtasks[0].files = ["planned.txt"]
+    ticket.subtasks[0].instructions += "\nYou may also edit work_1.txt."
+    save_ticket(ticket)
+    done = pipeline.approve(ticket.id)
+    assert not any(warning.startswith("Scope:") for warning in done.warnings)
+
+
+def test_stats_count_a_resumed_session_once(local_repository: Path, agents: FakeAgents) -> None:
+    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
+    costs = [(WORKER, "w", 1.0), (WORKER, "w", 1.5), (AgentRole.REVIEWER, "r", 0.5), (WORKER, "w2", 0.25)]
+    ticket.runs = [usage(role, session).model_copy(update={"cost_usd": cost}) for role, session, cost in costs]
+    save_ticket(ticket)
+    spent = {row["role"]: row["cost_usd"] for row in reports.usage_stats(get_settings())}
+    assert spent == {"worker": 1.75, "reviewer": 0.5}
+
+
 def test_a_session_past_the_token_ceiling_starts_fresh(
     local_repository: Path, agents: FakeAgents, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -414,3 +436,81 @@ def test_a_workers_project_notes_land_in_the_projects_claude_md_and_in_the_diff(
     assert "- The entry point is app.py." in (local_repository / "CLAUDE.md").read_text()
     assert ticket.work_log[0].files == ["app.py"]
     assert "CLAUDE.md" in git(local_repository, "status", "--porcelain")
+    pipeline.review(ticket.id)
+    assert "## cw's project notes" in agents.prompts_for(AgentRole.REVIEWER)[0]
+
+
+def test_the_reviewer_hears_about_cw_notes_only_when_the_diff_has_them(
+    local_repository: Path, agents: FakeAgents
+) -> None:
+    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
+    pipeline.review(ticket.id)
+    assert "## cw's project notes" not in agents.prompts_for(AgentRole.REVIEWER)[0]
+
+
+def test_fix_sends_the_open_pr_comments_to_the_worker_pushes_the_fix_and_resolves_them(
+    remote_repository: Path, workspace: Path, agents: FakeAgents, host: FakeHost
+) -> None:
+    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
+    pipeline.open_pull_request(ticket.id)
+    host.threads = [
+        PullRequestThread(id="T1", path="work_1.txt", line=1, body="reviewer: be stricter\nalice: and rename it"),
+    ]
+    fixed = pipeline.fix_pull_request(ticket.id)
+    prompt = agents.prompts_for(WORKER)[1]
+    assert prompt.startswith("## Address these pull request comments")
+    assert "- `work_1.txt:1`\n  reviewer: be stricter\n  alice: and rename it" in prompt
+    assert fixed.status == TicketStatus.PR_OPEN and host.resolved == ["T1"]
+    assert host.summaries[-1] == "**W1** · 1 comment(s)\n\npass 2"
+    assert git(remote_repository, "rev-list", "--count", f"main..{ticket.branch}") == "2"
+    assert git(workspace / "origin.git", "rev-parse", ticket.branch) == git(remote_repository, "rev-parse", "HEAD")
+
+
+def test_fix_without_open_comments_runs_no_agent(remote_repository: Path, agents: FakeAgents, host: FakeHost) -> None:
+    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
+    pipeline.open_pull_request(ticket.id)
+    runs = len(agents.prompts)
+    pipeline.fix_pull_request(ticket.id)
+    assert len(agents.prompts) == runs and host.resolved == []
+
+
+def test_merge_refuses_until_ci_passed_and_no_blocking_finding_is_left(
+    remote_repository: Path, agents: FakeAgents, host: FakeHost
+) -> None:
+    finding = ReviewComment(path="work_1.txt", line=1, severity=Severity.BLOCKING, body="wrong")
+    agents.reviewer = lambda prompt: ReviewerResult(verdict=Verdict.CHANGES, summary="no", comments=[finding])
+    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
+    pipeline.open_pull_request(ticket.id)
+    with pytest.raises(AppException, match="blocking review finding"):
+        pipeline.merge_pull_request(ticket.id)
+
+    stored = find_ticket(ticket.id)
+    stored.reviews = []
+    save_ticket(stored)
+    host.ci = False
+    with pytest.raises(AppException, match="CI has not passed"):
+        pipeline.merge_pull_request(ticket.id)
+    assert host.merged == [] and find_ticket(ticket.id).status == TicketStatus.PR_OPEN
+
+
+def test_merge_squash_merges_on_the_host_closes_the_ticket_and_deletes_the_local_branch(
+    workspace: Path, remote_repository: Path, agents: FakeAgents, host: FakeHost
+) -> None:
+    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
+    pipeline.open_pull_request(ticket.id)
+
+    def squash_on_the_host(number: int, branch: str, message: str) -> None:
+        host.merged.append((number, branch, message))
+        git(workspace, "clone", str(workspace / "origin.git"), "host")
+        git(workspace / "host", "merge", "--squash", f"origin/{branch}")
+        git(workspace / "host", "commit", "-m", message)
+        git(workspace / "host", "push", "origin", "main")
+
+    host.merge = squash_on_the_host
+    merged = pipeline.merge_pull_request(ticket.id)
+    assert host.merged == [(1, ticket.branch, "feat: work")]
+    assert merged.status == TicketStatus.DONE
+    assert git(remote_repository, "branch", "--show-current") == "main"
+    assert ticket.branch not in git(remote_repository, "branch", "--list")
+    assert git(remote_repository, "rev-parse", "main") == git(workspace / "origin.git", "rev-parse", "main")
+    assert (remote_repository / "work_1.txt").exists()

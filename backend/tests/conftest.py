@@ -8,7 +8,7 @@ import pytest
 
 from cw import onboarding, pipeline
 from cw.config import AgentRole, GitHostProvider, get_settings
-from cw.git_hosts.base import PullRequest
+from cw.git_hosts.base import PullRequest, PullRequestThread
 from cw.models import (
     PlannerResult,
     ReviewerResult,
@@ -99,7 +99,12 @@ class FakeAgents:
 class FakeHost:
     def __init__(self) -> None:
         self.reviews = 0
+        self.summaries: list[str] = []
         self.targets: list[str] = []
+        self.threads: list[PullRequestThread] = []
+        self.resolved: list[str] = []
+        self.ci = True
+        self.merged: list[tuple[int, str, str]] = []
 
     def create_pull_request(self, branch: str, base_branch: str, title: str, body: str) -> PullRequest:
         self.targets.append(base_branch)
@@ -107,6 +112,19 @@ class FakeHost:
 
     def post_review(self, number: int, summary: str, comments: list) -> None:
         self.reviews += 1
+        self.summaries.append(summary)
+
+    def ci_passed(self, number: int, sha: str) -> bool:
+        return self.ci
+
+    def open_threads(self, number: int) -> list[PullRequestThread]:
+        return [thread for thread in self.threads if thread.id not in self.resolved]
+
+    def resolve_thread(self, number: int, thread_id: str) -> None:
+        self.resolved.append(thread_id)
+
+    def merge(self, number: int, branch: str, message: str) -> None:
+        self.merged.append((number, branch, message))
 
 
 @pytest.fixture

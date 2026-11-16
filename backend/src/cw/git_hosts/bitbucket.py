@@ -9,7 +9,7 @@ import urllib.request
 
 from cw.config import BitbucketCredentials
 from cw.errors import AppErrorCode, AppException
-from cw.git_hosts.base import PullRequest
+from cw.git_hosts.base import PullRequest, PullRequestThread
 from cw.models import ReviewComment
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,9 @@ API_ROOT = "https://api.bitbucket.org/2.0/repositories"
 REMOTE_PATTERN = re.compile(r"bitbucket\.org[:/](?P<workspace>[^/]+)/(?P<slug>[^/]+?)(\.git)?$")
 JSON_CONTENT_TYPE = "application/json"
 REQUEST_TIMEOUT_SECONDS = 30
+SUCCESSFUL_STATE = "SUCCESSFUL"
+SQUASH_STRATEGY = "squash"
+COMMENTS_PAGE_SIZE = 100
 
 
 class BitbucketHost:
@@ -74,3 +77,35 @@ class BitbucketHost:
         if not statuses:
             return "No builds reported."
         return "\n".join(f"{status.get('state')}\t{status.get('name')}" for status in statuses)
+
+    def ci_passed(self, number: int, sha: str) -> bool:
+        """Return whether every build reported on the commit succeeded."""
+        statuses = self._request("GET", f"/commit/{sha}/statuses").get("values", [])
+        return all(status.get("state") == SUCCESSFUL_STATE for status in statuses)
+
+    def open_threads(self, number: int) -> list[PullRequestThread]:
+        """Return the unresolved inline comments, each with its replies, every comment prefixed with its author."""
+        comments = self._request("GET", f"/pullrequests/{number}/comments?pagelen={COMMENTS_PAGE_SIZE}")
+        live = [comment for comment in comments.get("values", []) if not comment.get("deleted")]
+        threads: dict[int, PullRequestThread] = {}
+        for comment in live:
+            inline = comment.get("inline")
+            if inline and not comment.get("parent") and not comment.get("resolution"):
+                line = inline.get("to") or inline.get("from") or 0
+                thread = PullRequestThread(id=str(comment["id"]), path=inline["path"], line=line, body="")
+                threads[comment["id"]] = thread
+        for comment in live:
+            thread = threads.get(comment["id"]) or threads.get((comment.get("parent") or {}).get("id"))
+            if thread:
+                author = comment.get("user", {}).get("display_name", "someone")
+                thread.body = "\n".join(filter(None, [thread.body, f"{author}: {comment['content']['raw']}"]))
+        return list(threads.values())
+
+    def resolve_thread(self, number: int, thread_id: str) -> None:
+        """Resolve an inline comment and its replies."""
+        self._request("POST", f"/pullrequests/{number}/comments/{thread_id}/resolve")
+
+    def merge(self, number: int, branch: str, message: str) -> None:
+        """Squash-merge the pull request and close its source branch."""
+        payload = {"merge_strategy": SQUASH_STRATEGY, "close_source_branch": True, "message": message}
+        self._request("POST", f"/pullrequests/{number}/merge", payload)

@@ -64,12 +64,55 @@ First time? Follow [FIRST_RUN.md](FIRST_RUN.md). How it works and why: [EXPLANAT
 | Have it reviewed, nothing committed | `cw review <ticket>` | **Review only** |
 | Review it and open the PR | `cw pr <ticket>` | **Review & open PR** |
 | Continue after a stop, an error or the usage limit | `cw resume <ticket>` | **Resume** |
-| Clean up after merge | `cw done <ticket>` (`--abandon` to drop it) | **Mark done** / **More** |
+| Let the worker address the PR's comments | `cw fix <ticket>` | **Fix comments** |
+| Squash-merge once CI passed | `cw merge <ticket>` | **Merge** |
+| Clean up after merging yourself | `cw done <ticket>` (`--abandon` to drop it) | **Mark done** / **More** |
 | Pause a ticket to start another | `cw park <ticket>` | **More → Park** |
 | Read a ticket | `cw show <ticket>`, or open `~/.cw/tickets/<project>/<ticket>.md` | select it |
 | See everything | `cw status`, `cw stats`, `cw toolkit`, `cw project list` | Overview, Usage, Toolkit |
 
 Every view has a `--json` form; FRIDAY uses exactly those. While a command runs, cw prints each tool call the agent makes, so you can follow it live.
+
+## All commands
+
+`<ticket>` is a ticket id, `<project>` a project name. `cw <command> --help` shows the same.
+
+```bash
+# Setup
+cw init --toolkit <path> --github-repo <owner/name> [--force]   # write a starter config
+cw config [show] [--json]                                       # print the config
+cw config set < config.json                                     # replace the config with JSON from stdin
+cw doctor                                                       # check binaries, tokens, toolkit and plugins
+cw toolkit [--json]                                             # agents, skills and models
+
+# Projects
+cw project add <path> [--name <name>] [--host github|bitbucket] [--onboard]   # register a repository
+cw project onboard <project>                                    # map it with the onboarder agent
+cw project remove <project>                                     # unregister it
+cw project list                                                 # each project's codebase state, as JSON
+cw project wire <project>                                       # write the toolkit into the repo's .claude/settings.json
+cw project map <project> [--json]                               # generate or print the repo map
+cw new <name> "<idea>" [--path <path>] [--stack <stack>] [--github private|public]   # create a project from an idea
+
+# Tickets, in the order you use them
+cw run <project> "<request>" [--plan] [--base <branch>]         # start a ticket
+cw run <ticket> "<follow-up>"                                   # answer a question, give plan feedback, or follow up
+cw approve <ticket>                                             # approve the plan and run the workers
+cw split <ticket>                                               # one ticket per change the planner split out
+cw resume <ticket>                                              # re-run the step that paused, was blocked or stopped
+cw review <ticket>                                              # checks and reviewer; nothing is committed
+cw pr <ticket>                                                  # review, commit once, push, open the pull request
+cw ci <ticket>                                                  # the pull request's CI status
+cw fix <ticket>                                                 # the worker addresses the PR's open comments, then push
+cw merge <ticket>                                               # squash-merge once CI passed, close the ticket
+cw done <ticket> [--abandon]                                    # close the ticket and switch back
+cw park <ticket>                                                # save the work as a WIP commit and switch back
+
+# Looking at things
+cw status [--project <project>] [--include-archived] [--json]   # list tickets
+cw show <ticket> [--json]                                       # one ticket
+cw stats [--json]                                               # token usage per project and role
+```
 
 ## Develop
 

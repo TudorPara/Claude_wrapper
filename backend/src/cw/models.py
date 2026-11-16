@@ -214,7 +214,7 @@ class ReviewEntry(BaseModel):
 
 
 class RunUsage(BaseModel):
-    """Token usage of one agent run."""
+    """Token usage of one agent run; `cost_usd` is Claude Code's total for the session so far, not for this run."""
 
     at: datetime
     role: str

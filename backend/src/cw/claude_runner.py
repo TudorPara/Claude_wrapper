@@ -27,6 +27,7 @@ SHOWN_TOPICS_ENV = "CW_SHOWN_TOPICS"
 SECRET_ENV_PREFIXES = ("BITBUCKET__",)
 TICKET_PLACEHOLDER = "{ticket}"
 SAFE_GIT_PREFIXES = ("git status", "git diff", "git log", "git show")
+PIPE_PREFIXES = ("head", "tail")
 PROTECTED_TOOLS = ("Read", "Edit", "Write")
 ERROR_TAIL_CHARS = 2000
 RESULT_EVENT = "result"
@@ -80,13 +81,22 @@ def _rules_prompt(
     return "\n\n".join(sections), list(topics)
 
 
+def _without_folders(command: str, checkout: Path) -> str:
+    """Return the command without trailing folders; never a file, which may be the script itself, not a target."""
+    words = command.split()
+    while len(words) > 1 and (checkout / words[-1]).is_dir():
+        words.pop()
+    return " ".join(words)
+
+
 def _run_settings(settings: Settings, project: Project, role: AgentRole) -> dict:
     """Return the per-run Claude Code settings: permissions and which plugins load."""
     allow = []
     if role == AgentRole.WORKER:
-        commands = [project.commands.lint, project.commands.test]
-        prefixes = [command for command in commands if command] + project.extra_allowed_bash + list(SAFE_GIT_PREFIXES)
-        allow = [f"Bash({prefix}:*)" for prefix in prefixes]
+        commands = [command for command in (project.commands.lint, project.commands.test) if command]
+        narrowed = [_without_folders(command, project.path) for command in commands]
+        prefixes = commands + narrowed + project.extra_allowed_bash + list(SAFE_GIT_PREFIXES + PIPE_PREFIXES)
+        allow = [f"Bash({prefix}:*)" for prefix in dict.fromkeys(prefixes)]
     deny = [f"{tool}({pattern})" for pattern in project.protected_paths for tool in PROTECTED_TOOLS]
     own_plugins = {
         f"{path.name}@{settings.toolkit.marketplace}": False for path in (settings.toolkit.path / "plugins").iterdir()
