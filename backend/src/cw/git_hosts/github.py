@@ -58,7 +58,13 @@ class GitHubHost:
         """Post one review with inline comments, falling back to a body-only review when GitHub rejects a line."""
         endpoint = f"repos/{self._repository()}/pulls/{number}/reviews"
         inline = [
-            {"path": c.path, "line": c.line, "side": NEW_SIDE, "body": f"**{c.severity}** {c.body}"} for c in comments
+            {
+                "path": comment.path,
+                "line": comment.line,
+                "side": NEW_SIDE,
+                "body": f"**{comment.severity}** {comment.body}",
+            }
+            for comment in comments
         ]
         review = {"body": summary, "event": REVIEW_EVENT, "comments": inline}
         try:
@@ -66,7 +72,9 @@ class GitHubHost:
         except AppException as error:
             if UNPROCESSABLE_HINT not in error.detail:
                 raise
-            listed = "\n".join(f"- `{c.path}:{c.line}` **{c.severity}** {c.body}" for c in comments)
+            listed = "\n".join(
+                f"- `{comment.path}:{comment.line}` **{comment.severity}** {comment.body}" for comment in comments
+            )
             fallback = {"body": f"{summary}\n\n{listed}", "event": REVIEW_EVENT}
             self._gh("api", "--method", "POST", endpoint, "--input", "-", stdin=json.dumps(fallback))
 

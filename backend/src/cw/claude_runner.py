@@ -89,7 +89,7 @@ def _without_folders(command: str, checkout: Path) -> str:
     return " ".join(words)
 
 
-def _run_settings(settings: Settings, project: Project, role: AgentRole) -> dict:
+def _build_run_settings(settings: Settings, project: Project, role: AgentRole) -> dict:
     """Return the per-run Claude Code settings: permissions and which plugins load."""
     allow = []
     if role == AgentRole.WORKER:
@@ -211,7 +211,7 @@ def run_agent[T: BaseModel](
         agents_file = Path(folder) / "agents.json"
         agents_file.write_text(json.dumps({agent.name: definition}))
         settings_file = Path(folder) / "settings.json"
-        settings_file.write_text(json.dumps(_run_settings(settings, project, role)))
+        settings_file.write_text(json.dumps(_build_run_settings(settings, project, role)))
         rules_file = Path(folder) / "rules.md"
         rules, shown_topics = _rules_prompt(settings, project, agent.skills, files, new_project)
         rules_file.write_text(rules)

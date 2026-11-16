@@ -233,15 +233,15 @@ def get_settings() -> Settings:
         raise AppException(AppErrorCode.INVALID_CONFIGURATION, str(error)) from error
 
 
-def validate_config(data: dict) -> Settings:
+def validate_config(raw_config: dict) -> Settings:
     """Validate config data without reading the file or the environment."""
     try:
-        return Settings.model_validate(data)
+        return Settings.model_validate(raw_config)
     except ValidationError as error:
         raise AppException(AppErrorCode.INVALID_CONFIGURATION, str(error)) from error
 
 
-def save_settings(settings: Settings) -> None:
+def write_settings(settings: Settings) -> None:
     """Write the settings back to the config file, never the secrets."""
     config_path().parent.mkdir(parents=True, exist_ok=True)
     data = settings.model_dump(mode="json", exclude=SECRET_FIELDS)

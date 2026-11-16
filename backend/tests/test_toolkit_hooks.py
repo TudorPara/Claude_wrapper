@@ -65,15 +65,15 @@ def rules(session: str, project: Path, event: str, file_path: Path) -> subproces
 def test_a_topic_is_shown_once_per_session_when_a_covered_file_is_touched(tmp_path: Path) -> None:
     session = "one-session"
     first = rules(session, tmp_path, "PostToolUse", tmp_path / "src" / "app" / "routes" / "items.py")
-    assert first.returncode == 2 and "## 6. Layers" in first.stderr and "repeat your edit" not in first.stderr
+    assert first.returncode == 2 and "## 2. Layers" in first.stderr and "repeat your edit" not in first.stderr
     assert rules(session, tmp_path, "PostToolUse", tmp_path / "src" / "app" / "routes" / "users.py").returncode == 0
     edit = rules(session, tmp_path, "PreToolUse", tmp_path / "alembic" / "env.py")
-    assert edit.returncode == 2 and "## 12. Migrations" in edit.stderr and "repeat your edit" in edit.stderr
+    assert edit.returncode == 2 and "## 4. Migrations" in edit.stderr and "repeat your edit" in edit.stderr
     assert rules(session, tmp_path, "PreToolUse", tmp_path / "src" / "app" / "helpers.py").returncode == 0
     assert rules(session, tmp_path, "PreToolUse", Path("/etc/hosts")).returncode == 0
 
 
 def test_every_topic_in_the_index_has_its_file() -> None:
     index = json.loads((TOPICS / "topics.json").read_text())
-    for topic in [*index["topics"], *index["new_project"]]:
+    for topic in [*index["topics"], *index["always"], *index["new_project"], *index["review"]]:
         assert (TOPICS / f"{topic}.md").exists(), topic

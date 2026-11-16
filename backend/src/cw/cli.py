@@ -9,7 +9,7 @@ from importlib import resources
 from pathlib import Path
 
 from cw import onboarding, pipeline, repo_map, reports
-from cw.config import GitHostProvider, config_path, get_settings, repo_map_path, save_settings, validate_config
+from cw.config import GitHostProvider, config_path, get_settings, repo_map_path, validate_config, write_settings
 from cw.errors import AppException
 from cw.tickets import CLOSED_STATUSES, find_ticket, list_tickets, looks_like_ticket_id, ticket_markdown
 
@@ -23,9 +23,9 @@ STOPPED_EXIT_CODE = 130
 GITHUB_VISIBILITIES = ("private", "public")
 
 
-def _print_json(data: object) -> None:
-    """Print data as JSON on stdout."""
-    print(json.dumps(data, indent=2, default=str))
+def _print_json(payload: object) -> None:
+    """Print a payload as JSON on stdout."""
+    print(json.dumps(payload, indent=2, default=str))
 
 
 def _init(arguments: argparse.Namespace) -> None:
@@ -33,10 +33,10 @@ def _init(arguments: argparse.Namespace) -> None:
     if config_path().exists() and not arguments.force:
         logger.info("%s already exists; pass --force to overwrite it.", config_path())
         return
-    data = json.loads(resources.files("cw").joinpath(EXAMPLE_CONFIG).read_text())
-    data["toolkit"]["path"] = str(Path(arguments.toolkit).expanduser().resolve())
-    data["toolkit"]["github_repo"] = arguments.github_repo
-    save_settings(validate_config(data))
+    starter_config = json.loads(resources.files("cw").joinpath(EXAMPLE_CONFIG).read_text())
+    starter_config["toolkit"]["path"] = str(Path(arguments.toolkit).expanduser().resolve())
+    starter_config["toolkit"]["github_repo"] = arguments.github_repo
+    write_settings(validate_config(starter_config))
     logger.info("Wrote %s.", config_path())
 
 
@@ -119,7 +119,7 @@ def _report(ticket_id: str) -> None:
 
 def _status(arguments: argparse.Namespace) -> None:
     """List tickets."""
-    summaries = [s for s in list_tickets() if not arguments.project or s.project == arguments.project]
+    summaries = [summary for summary in list_tickets() if not arguments.project or summary.project == arguments.project]
     if not arguments.include_archived:
         summaries = [summary for summary in summaries if not summary.archived]
     if arguments.json:
@@ -144,7 +144,7 @@ def _config(arguments: argparse.Namespace) -> None:
     if arguments.config_command == "set":
         new = validate_config(json.load(sys.stdin))
         old = get_settings() if config_path().exists() else None
-        save_settings(new)
+        write_settings(new)
         onboarding.sync_project_settings(old, new)
         logger.info("Saved %s.", config_path())
         return
@@ -153,7 +153,7 @@ def _config(arguments: argparse.Namespace) -> None:
 
 def _doctor(_: argparse.Namespace) -> None:
     """Check the environment."""
-    for check, status, hint in reports.doctor(get_settings()):
+    for check, status, hint in reports.build_doctor_report(get_settings()):
         print(f"{status:<8} {check:<50} {'' if status == reports.OK else hint}")
 
 

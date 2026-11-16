@@ -148,7 +148,9 @@ def fix_checks_instruction(failures: list[tuple[str, str]]) -> str:
 
 def fix_review_instruction(comments: list[ReviewComment]) -> str:
     """Return the instruction to address every review finding, minor ones included: the reviewer checks them all."""
-    findings = "\n".join(f"- `{c.path}:{c.line}` ({c.severity}) {c.body}" for c in comments)
+    findings = "\n".join(
+        f"- `{comment.path}:{comment.line}` ({comment.severity}) {comment.body}" for comment in comments
+    )
     return (
         "## Address these review findings, and only these\n\n"
         f"{findings}\n\nDecide yourself: questions are not possible here."
@@ -157,7 +159,9 @@ def fix_review_instruction(comments: list[ReviewComment]) -> str:
 
 def pull_request_comments_instruction(threads: list[PullRequestThread]) -> str:
     """Return the instruction to address the open comments on the pull request, from the reviewer and from people."""
-    findings = "\n".join(f"- `{t.path}:{t.line}`\n  {t.body.replace(chr(10), chr(10) + '  ')}" for t in threads)
+    findings = "\n".join(
+        f"- `{thread.path}:{thread.line}`\n  {thread.body.replace(chr(10), chr(10) + '  ')}" for thread in threads
+    )
     return (
         "## Address these pull request comments\n\nThe reviewer agent and people left these on the pull request. "
         f"Address every one.\n\n{findings}\n\nWhere a comment needs no change, say why in `summary`, one line per "
@@ -259,7 +263,9 @@ def reviewer_prompt(project: Project, ticket: Ticket, diff: str, truncated: bool
     )
     earlier = ""
     if previous:
-        findings = "\n".join(f"- `{c.path}:{c.line}` {c.body}" for entry in previous for c in entry.comments)
+        findings = "\n".join(
+            f"- `{comment.path}:{comment.line}` {comment.body}" for entry in previous for comment in entry.comments
+        )
         earlier = f"## Your previous findings (check each is fixed)\n\n{findings}"
     memory = (
         f"## cw's project notes\n\nThe section `{NOTES_HEADING}` in CLAUDE.md is written by cw from the workers' "

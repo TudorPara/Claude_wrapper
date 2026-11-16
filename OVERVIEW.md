@@ -78,7 +78,8 @@ Every loop has a limit in the config, so a ticket can't run away in time or cost
 - **Small, targeted context.** Workers went from 35–80k tokens per turn to about 8–12k, and the planner from about 19k to 4.4k.
   - The planner reads a map of the repository, not the code.
   - The planner hands workers 5–15 `file:lines` pointers to start from.
-  - Rules arrive only when relevant: about 110 lines always, and a topic only when an agent touches a matching file.
+  - Rules arrive only when relevant: the core rules, the style rules and ponytail always (about 390 lines, cached), and a topic only when an agent touches a matching file.
+- **The team's own conventions.** The Python rules are the Nexttech internship conventions (`nexttech-claude-kit`), copied without the reviewers' names, so agents write code the team's reviewers expect.
 - **Prompt caching.** A worker keeps one session across related tasks, so repeated context is read from cache at about a tenth of the price.
 - **No router agent and no parallel agents.** A first version used 1 planner, 17 workers and 2 reviewers for "two small features"; now the same work is 2 tickets with about 1 worker and 1 reviewer each, and 1 commit instead of 14.
 

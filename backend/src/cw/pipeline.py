@@ -41,7 +41,7 @@ from cw.tickets import (
     make_title,
     new_ticket_id,
     project_lock,
-    save_ticket,
+    write_ticket,
 )
 from cw.toolkit import toolkit_version
 
@@ -119,7 +119,7 @@ def _stop(ticket: Ticket, step: Step, status: TicketStatus, reason: str) -> None
     ticket.status = status
     ticket.paused_step = step
     ticket.error = reason
-    save_ticket(ticket)
+    write_ticket(ticket)
 
 
 def _guarded(project: Project, ticket: Ticket, step: Step, action: Callable[[], None]) -> None:
@@ -130,7 +130,7 @@ def _guarded(project: Project, ticket: Ticket, step: Step, action: Callable[[], 
             action()
             ticket.error = None
             ticket.paused_step = None
-            save_ticket(ticket)
+            write_ticket(ticket)
     except AppException as error:
         if error.error_code in (AppErrorCode.TICKET_BUSY, AppErrorCode.INVALID_STATE):
             raise
@@ -197,7 +197,7 @@ def _changes_so_far(project: Project, ticket: Ticket) -> str:
     return git.diff_stat(project.path, ticket.base_sha, git.snapshot(project.path))
 
 
-def _run[T: BaseModel](
+def _resume_or_start_agent[T: BaseModel](
     settings: Settings,
     project: Project,
     ticket: Ticket,
@@ -214,7 +214,7 @@ def _run[T: BaseModel](
     agent = WORKER_AGENT if role == AgentRole.WORKER else PLANNER_AGENT
     if session:
         try:
-            result, usage = run_agent(
+            agent_result, usage = run_agent(
                 settings,
                 project,
                 agent,
@@ -232,7 +232,7 @@ def _run[T: BaseModel](
             logger.info("The %s's session could not be continued; starting a new one.", agent)
             session = None
     if not session:
-        result, usage = run_agent(
+        agent_result, usage = run_agent(
             settings,
             project,
             agent,
@@ -244,7 +244,7 @@ def _run[T: BaseModel](
             new_project=ticket.new_project,
         )
     ticket.runs.append(usage)
-    return result, usage.session_id
+    return agent_result, usage.session_id
 
 
 def _worker(
@@ -252,7 +252,7 @@ def _worker(
 ) -> WorkerResult:
     """Give a worker its next instruction and write what it did into the ticket."""
     tree_before = git.snapshot(project.path)
-    result, session = _run(
+    worker_result, session = _resume_or_start_agent(
         settings,
         project,
         ticket,
@@ -266,7 +266,6 @@ def _worker(
         ),
     )
     actual_files = git.changed_files(project.path, tree_before, git.snapshot(project.path))
-    # ponytail: the run's average turn understates its last turn; read per-turn usage from the stream if that matters.
     size = ticket.runs[-1].context_per_turn()
     if size > WORKER_SESSION_TOKEN_CEILING:
         logger.info("Worker %s's session is at about %s tokens a turn; it starts fresh next time.", worker, size)
@@ -275,9 +274,9 @@ def _worker(
     else:
         ticket.worker_sessions[worker] = session
     ticket.last_worker = worker
-    if result.status != WorkerStatus.QUESTION:
+    if worker_result.status != WorkerStatus.QUESTION:
         label = task or OTHER_WORK
-        empty = result.status == WorkerStatus.DONE and not actual_files
+        empty = worker_result.status == WorkerStatus.DONE and not actual_files
         _set_warning(
             ticket,
             f"{EMPTY_WARNING} {label}:",
@@ -285,7 +284,7 @@ def _worker(
         )
         subtask = next((subtask for subtask in ticket.subtasks if subtask.id == task), None) if task else None
         unexpected = (
-            sorted(f for f in actual_files if f not in subtask.files and f not in subtask.instructions)
+            sorted(path for path in actual_files if path not in subtask.files and path not in subtask.instructions)
             if subtask and subtask.files
             else []
         )
@@ -298,15 +297,15 @@ def _worker(
             WorkEntry(
                 at=utc_now(),
                 subtask=task,
-                status=result.status,
-                summary=result.summary,
+                status=worker_result.status,
+                summary=worker_result.summary,
                 worker=worker,
                 files=actual_files,
-                handoff=result.handoff,
-                project_notes=result.project_notes,
+                handoff=worker_result.handoff,
+                project_notes=worker_result.project_notes,
             )
         )
-        notes = project_memory.add_notes(project.path, result.project_notes)
+        notes = project_memory.add_notes(project.path, worker_result.project_notes)
         _set_warning(
             ticket,
             MEMORY_WARNING,
@@ -314,11 +313,11 @@ def _worker(
             if notes > MEMORY_MAX_NOTES
             else None,
         )
-        if result.commit_message and not ticket.commit_message:
-            ticket.commit_message = result.commit_message.splitlines()[0]
+        if worker_result.commit_message and not ticket.commit_message:
+            ticket.commit_message = worker_result.commit_message.splitlines()[0]
     ticket.worker_seen[worker] = len(ticket.work_log)
-    save_ticket(ticket)
-    return result
+    write_ticket(ticket)
+    return worker_result
 
 
 def _ask(
@@ -329,7 +328,7 @@ def _ask(
     ticket.qa += asked
     if ticket.planner_session:
         logger.info("Worker %s asks the planner %s question(s).", worker, len(asked))
-        answer, ticket.planner_session = _run(
+        answer, ticket.planner_session = _resume_or_start_agent(
             settings,
             project,
             ticket,
@@ -346,7 +345,7 @@ def _ask(
         ticket.questions = unanswered
         ticket.asking_worker = worker
         ticket.status = TicketStatus.NEEDS_INPUT
-    save_ticket(ticket)
+    write_ticket(ticket)
     return not unanswered
 
 
@@ -368,18 +367,22 @@ def _work_on(
     Questions go to the planner first and to the user only when the planner cannot answer.
     Returns None when the ticket now waits for the user.
     """
-    result = _worker(settings, project, ticket, worker, _with_answers(ticket, worker, instruction), task)
+    worker_result = _worker(settings, project, ticket, worker, _with_answers(ticket, worker, instruction), task)
     for _ in range(project.profile.limits.max_question_rounds):
-        if result.status != WorkerStatus.QUESTION:
-            return result
-        if not _ask(settings, project, ticket, worker, task, result.questions):
+        if worker_result.status != WorkerStatus.QUESTION:
+            return worker_result
+        if not _ask(settings, project, ticket, worker, task, worker_result.questions):
             return None
-        result = _worker(settings, project, ticket, worker, _with_answers(ticket, worker, instruction), task)
-    if result.status == WorkerStatus.QUESTION:
-        result = _worker(settings, project, ticket, worker, prompts.no_more_questions_instruction(instruction), task)
-    if result.status == WorkerStatus.QUESTION:
-        raise AppException(AppErrorCode.AGENT_FAILED, f"Worker {worker} still asks: {'; '.join(result.questions)}")
-    return result
+        worker_result = _worker(settings, project, ticket, worker, _with_answers(ticket, worker, instruction), task)
+    if worker_result.status == WorkerStatus.QUESTION:
+        worker_result = _worker(
+            settings, project, ticket, worker, prompts.no_more_questions_instruction(instruction), task
+        )
+    if worker_result.status == WorkerStatus.QUESTION:
+        raise AppException(
+            AppErrorCode.AGENT_FAILED, f"Worker {worker} still asks: {'; '.join(worker_result.questions)}"
+        )
+    return worker_result
 
 
 def _fix(settings: Settings, project: Project, ticket: Ticket, instruction: str) -> WorkerResult:
@@ -412,7 +415,7 @@ def _plan(settings: Settings, project: Project, ticket: Ticket, feedback: str | 
     """Run the planner and move the ticket to questions, a split, or approval."""
     ticket.status = TicketStatus.IN_PROGRESS
     limits = project.profile.limits
-    result, ticket.planner_session = _run(
+    plan_result, ticket.planner_session = _resume_or_start_agent(
         settings,
         project,
         ticket,
@@ -421,27 +424,27 @@ def _plan(settings: Settings, project: Project, ticket: Ticket, feedback: str | 
         ticket.planner_session,
         lambda fresh: prompts.planner_prompt(project, ticket, feedback),
     )
-    if len(result.split) > 1:
-        ticket.split = result.split
+    if len(plan_result.split) > 1:
+        ticket.split = plan_result.split
         ticket.questions = [
-            f"This is {len(result.split)} separate changes. Start each as its own ticket "
+            f"This is {len(plan_result.split)} separate changes. Start each as its own ticket "
             "(own branch and PR), or reply to keep them together."
         ]
         ticket.status = TicketStatus.NEEDS_INPUT
         return
     ticket.split = []
-    if result.questions and ticket.question_rounds < limits.max_question_rounds:
-        ticket.questions = result.questions
+    if plan_result.questions and ticket.question_rounds < limits.max_question_rounds:
+        ticket.questions = plan_result.questions
         ticket.question_rounds += 1
         ticket.status = TicketStatus.NEEDS_INPUT
         return
     ticket.questions = []
-    ticket.plan = result.plan
-    ticket.options_considered = result.options_considered
-    ticket.files = result.files
-    ticket.context_pack = result.context_pack
-    ticket.subtasks = result.subtasks or [
-        Subtask(id="S1", title=ticket.title, instructions=result.plan, files=result.files)
+    ticket.plan = plan_result.plan
+    ticket.options_considered = plan_result.options_considered
+    ticket.files = plan_result.files
+    ticket.context_pack = plan_result.context_pack
+    ticket.subtasks = plan_result.subtasks or [
+        Subtask(id="S1", title=ticket.title, instructions=plan_result.plan, files=plan_result.files)
     ]
     _assign_workers(ticket.subtasks, limits.max_workers)
     ticket.tasks_done = []
@@ -461,16 +464,16 @@ def _has_unfinished_tasks(ticket: Ticket) -> bool:
 def _direct_pass(settings: Settings, project: Project, ticket: Ticket) -> bool:
     """Have a worker do the user's latest request; return False when the ticket now waits for a plan or an answer."""
     worker = ticket.last_worker or FIRST_WORKER
-    result = _work_on(settings, project, ticket, worker, prompts.direct_instruction(project, ticket), None)
-    if result is None:
+    worker_result = _work_on(settings, project, ticket, worker, prompts.direct_instruction(project, ticket), None)
+    if worker_result is None:
         return False
-    if result.status == WorkerStatus.NEEDS_PLAN:
-        logger.info("Worker escalated to the planner: %s", result.reason)
+    if worker_result.status == WorkerStatus.NEEDS_PLAN:
+        logger.info("Worker escalated to the planner: %s", worker_result.reason)
         ticket.route = Route.PLANNED
-        _plan(settings, project, ticket, f"The worker escalated before editing: {result.reason}")
+        _plan(settings, project, ticket, f"The worker escalated before editing: {worker_result.reason}")
         return False
-    if result.status == WorkerStatus.BLOCKED:
-        raise AppException(AppErrorCode.AGENT_FAILED, f"Worker blocked: {result.reason}")
+    if worker_result.status == WorkerStatus.BLOCKED:
+        raise AppException(AppErrorCode.AGENT_FAILED, f"Worker blocked: {worker_result.reason}")
     return True
 
 
@@ -482,22 +485,22 @@ def _task_passes(settings: Settings, project: Project, ticket: Ticket) -> bool:
     """
     while (task := next_task(ticket)) is not None:
         logger.info("Task %s · %s (worker %s)", task.id, task.title, task.worker)
-        result = _work_on(settings, project, ticket, task.worker, prompts.task_instruction(task), task.id)
-        if result is None:
+        worker_result = _work_on(settings, project, ticket, task.worker, prompts.task_instruction(task), task.id)
+        if worker_result is None:
             return False
-        if result.status != WorkerStatus.DONE:
-            raise AppException(AppErrorCode.AGENT_FAILED, f"Task {task.id} stopped: {result.reason}")
+        if worker_result.status != WorkerStatus.DONE:
+            raise AppException(AppErrorCode.AGENT_FAILED, f"Task {task.id} stopped: {worker_result.reason}")
         ticket.tasks_done.append(task.id)
-        save_ticket(ticket)
+        write_ticket(ticket)
         _checks_with_fixes(settings, project, ticket)
-        save_ticket(ticket)
+        write_ticket(ticket)
     return True
 
 
 def _work(settings: Settings, project: Project, ticket: Ticket, latest_prompt: bool) -> None:
     """Do the user's latest request when asked, then any unfinished planned tasks; the checks run after each."""
     ticket.status = TicketStatus.IN_PROGRESS
-    save_ticket(ticket)
+    write_ticket(ticket)
     if latest_prompt and not _direct_pass(settings, project, ticket):
         return
     if _has_unfinished_tasks(ticket):
@@ -559,7 +562,7 @@ def start_ticket(
         _record_baseline(project, ticket)
         if not new_project:
             repo_map.write_project_repo_map(checkout, repo_map_path(project.name))
-        save_ticket(ticket)
+        write_ticket(ticket)
     if plan_first:
         _guarded(project, ticket, Step.PLAN, lambda: _plan(settings, project, ticket, None))
     else:
@@ -659,7 +662,7 @@ def _review(settings: Settings, project: Project, ticket: Ticket) -> None:
         next_round = (previous[0].round + 1) if previous else 1
         changed = git.changed_files(project.path, ticket.last_reviewed_tree or ticket.base_sha, tree)
         for reviewer in project.profile.reviewers:
-            result, usage = run_agent(
+            review_result, usage = run_agent(
                 settings,
                 project,
                 reviewer,
@@ -677,13 +680,13 @@ def _review(settings: Settings, project: Project, ticket: Ticket) -> None:
                     at=utc_now(),
                     round=next_round,
                     reviewer=reviewer,
-                    verdict=result.verdict,
-                    summary=result.summary,
-                    comments=result.comments,
+                    verdict=review_result.verdict,
+                    summary=review_result.summary,
+                    comments=review_result.comments,
                 )
             )
         ticket.last_reviewed_tree = tree
-        save_ticket(ticket)
+        write_ticket(ticket)
         blocking = _blocking(_last_round(ticket))
         if not blocking or round_index == limits.max_review_rounds:
             break
@@ -740,7 +743,7 @@ def _review_only(settings: Settings, project: Project, ticket: Ticket) -> None:
     """Check and review the change without committing anything."""
     _require_changes(project, ticket)
     ticket.status = TicketStatus.IN_REVIEW
-    save_ticket(ticket)
+    write_ticket(ticket)
     _checks_with_fixes(settings, project, ticket)
     _review(settings, project, ticket)
     ticket.status = TicketStatus.READY
@@ -761,7 +764,7 @@ def _open_pull_request(settings: Settings, project: Project, ticket: Ticket) -> 
     target = _target(project, ticket)
     _require_changes(project, ticket)
     ticket.status = TicketStatus.IN_REVIEW
-    save_ticket(ticket)
+    write_ticket(ticket)
     _checks_with_fixes(settings, project, ticket)
     _review(settings, project, ticket)
     message = _commit_message(ticket)
@@ -835,9 +838,11 @@ def _fix_pull_request(settings: Settings, project: Project, ticket: Ticket) -> N
         logger.info("No open comments on %s.", ticket.pr_url)
         return
     logger.info("%s open comment(s) on %s go to worker %s.", len(threads), ticket.pr_url, ticket.last_worker)
-    result = _fix(settings, project, ticket, prompts.pull_request_comments_instruction(threads))
+    worker_result = _fix(settings, project, ticket, prompts.pull_request_comments_instruction(threads))
     _open_pull_request(settings, project, ticket)
-    host.post_review(ticket.pr_number, f"**{ticket.last_worker}** · {len(threads)} comment(s)\n\n{result.summary}", [])
+    host.post_review(
+        ticket.pr_number, f"**{ticket.last_worker}** · {len(threads)} comment(s)\n\n{worker_result.summary}", []
+    )
     for thread in threads:
         host.resolve_thread(ticket.pr_number, thread.id)
 
@@ -962,7 +967,7 @@ def finish(ticket_id: str, abandon: bool) -> None:
     with project_lock(project.name, ticket.id):
         if git.current_branch(checkout) == ticket.branch:
             if abandon:
-                git.discard_changes(checkout)
+                git.delete_uncommitted_changes(checkout)
             elif not git.is_clean(checkout):
                 raise AppException(AppErrorCode.INVALID_STATE, f"{ticket.branch} has uncommitted changes.")
             git.switch(checkout, ticket.previous_branch)
@@ -973,5 +978,5 @@ def finish(ticket_id: str, abandon: bool) -> None:
         if not abandon:
             repo_map.write_project_repo_map(checkout, repo_map_path(project.name))
     ticket.status = TicketStatus.ABANDONED if abandon else TicketStatus.DONE
-    save_ticket(ticket)
+    write_ticket(ticket)
     logger.info("%s is %s; back on %s.", ticket.id, ticket.status, ticket.previous_branch)

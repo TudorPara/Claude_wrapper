@@ -106,9 +106,9 @@ def test_rules_are_pinned_and_a_new_project_also_gets_the_stack_topic(workspace:
     rules, topics = claude_runner._rules_prompt(settings, project, ["core:rule-precedence"])
     for heading in ("## Skill core:rule-precedence", "## Skill core:engineering", "## Skill python:python-rules"):
         assert heading in rules
-    assert topics == [] and "## 2. Tech stack" not in rules
+    assert topics == ["core-rules", "python-style"] and "## 3. Naming" in rules and "## 1. Stack" not in rules
     rules, topics = claude_runner._rules_prompt(settings, project, [], new_project=True)
-    assert topics == ["stack-layout"] and "## 2. Tech stack" in rules
+    assert topics == ["core-rules", "python-style", "python-stack", "service-architecture"] and "## 1. Stack" in rules
 
 
 def test_a_review_gets_the_rules_that_cover_the_changed_files(workspace: Path) -> None:
@@ -116,10 +116,23 @@ def test_a_review_gets_the_rules_that_cover_the_changed_files(workspace: Path) -
     settings = get_settings()
     changed = ["src/app/routes/items.py", "alembic/versions/001_add_items.py", "README.md"]
     rules, topics = claude_runner._rules_prompt(settings, settings.project("demo"), ["core:pr-review"], changed)
-    assert topics == ["git-pr", "layers", "data-api"]
-    for heading in ("## Skill core:pr-review", "## 14. PR and git discipline", "## 6. Layers", "## 12. Migrations"):
+    assert topics == [
+        "core-rules",
+        "python-style",
+        "git-and-pr",
+        "pr-review-procedure",
+        "service-architecture",
+        "data-and-migrations",
+    ]
+    for heading in (
+        "## Skill core:pr-review",
+        "## 3. The pull request",
+        "## The checks",
+        "## 2. Layers",
+        "## 4. Migrations",
+    ):
         assert heading in rules
-    assert "## 13. Providers, agents and graphs" not in rules
+    assert "# Nexttech agents" not in rules
 
 
 def test_a_worker_may_narrow_the_checks_to_a_path_but_not_run_any_script(workspace: Path) -> None:
@@ -129,8 +142,8 @@ def test_a_worker_may_narrow_the_checks_to_a_path_but_not_run_any_script(workspa
     project = settings.project("demo")
     project.commands.lint = ".venv/bin/ruff check tests"
     project.commands.test = "python run_tests.py"
-    allow = claude_runner._run_settings(settings, project, AgentRole.WORKER)["permissions"]["allow"]
+    allow = claude_runner._build_run_settings(settings, project, AgentRole.WORKER)["permissions"]["allow"]
     assert "Bash(.venv/bin/ruff check:*)" in allow and "Bash(.venv/bin/ruff check tests:*)" in allow
     assert "Bash(python run_tests.py:*)" in allow and "Bash(python:*)" not in allow
     assert "Bash(tail:*)" in allow
-    assert claude_runner._run_settings(settings, project, AgentRole.REVIEWER)["permissions"]["allow"] == []
+    assert claude_runner._build_run_settings(settings, project, AgentRole.REVIEWER)["permissions"]["allow"] == []

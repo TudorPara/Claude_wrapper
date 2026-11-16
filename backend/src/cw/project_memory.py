@@ -24,18 +24,18 @@ def add_notes(project_dir: Path, notes: list[str]) -> int:
     path = project_dir / MEMORY_FILE_NAME
     if not path.exists() and (project_dir / CLAUDE_FOLDER / MEMORY_FILE_NAME).exists():
         path = project_dir / CLAUDE_FOLDER / MEMORY_FILE_NAME
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
-    known = {_normalized(line) for line in text.splitlines()}
+    memory_text = path.read_text(encoding="utf-8") if path.exists() else ""
+    known = {_normalized(line) for line in memory_text.splitlines()}
     new = [note.strip() for note in dict.fromkeys(notes) if note.strip() and _normalized(note) not in known]
-    if NOTES_HEADING not in text and not new:
+    if NOTES_HEADING not in memory_text and not new:
         return 0
-    if NOTES_HEADING not in text:
-        text = (text.rstrip() + "\n\n" if text.strip() else "") + NOTES_HEADING + "\n"
-    start = text.index(NOTES_HEADING)
-    end = text.find(NEXT_HEADING, start + len(NOTES_HEADING))
-    end = len(text) if end == -1 else end + 1
-    section = text[start:end].rstrip("\n") + "\n" + "".join(f"{BULLET}{note}\n" for note in new)
-    rest = text[end:]
+    if NOTES_HEADING not in memory_text:
+        memory_text = (memory_text.rstrip() + "\n\n" if memory_text.strip() else "") + NOTES_HEADING + "\n"
+    start = memory_text.index(NOTES_HEADING)
+    end = memory_text.find(NEXT_HEADING, start + len(NOTES_HEADING))
+    end = len(memory_text) if end == -1 else end + 1
+    section = memory_text[start:end].rstrip("\n") + "\n" + "".join(f"{BULLET}{note}\n" for note in new)
+    rest = memory_text[end:]
     if new:
-        path.write_text(text[:start] + section + ("\n" + rest if rest else ""), encoding="utf-8")
+        path.write_text(memory_text[:start] + section + ("\n" + rest if rest else ""), encoding="utf-8")
     return sum(1 for line in section.splitlines() if line.startswith(BULLET))

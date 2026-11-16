@@ -4,6 +4,27 @@ A running log of what went wrong in real use, why, and what was changed. Newest 
 
 ---
 
+## 2026-11-16 (night) · The Nexttech kit's rules replace the old Python rulebook; clearer names in cw
+
+**Why:** the agents wrote `from src.tictactoe…` and `from src.inference…` imports. The toolkit's `python-rules` came from an older rulebook that prescribes `src.` imports, `AppException(AppErrorCode.X)` and one-line docstrings, all of which the `nexttech-claude-kit` (the conventions from the internship's code reviews) says are wrong in a Nexttech project.
+
+### What changed
+
+- `python-rules/topics/` now holds the kit's nine `nexttech-*` skills and its `PR_review.md`, copied with only the reviewers' and people's names removed: `#13 name` became `#13`, and the person the rules call the decision-maker became "the project lead". The old topic files and the old core are gone; `python-rules/SKILL.md` is only an index. The kit itself was not edited.
+- `topics.json` gained an `always` list: `core-rules` and `python-style` go into every agent's system prompt. `new_project` gives `python-stack` and `service-architecture`; a review also gets `git-and-pr` and `pr-review-procedure`.
+- `rule-precedence` says how the kit's rules apply inside a cw run, without editing them: cw commits, agents cannot invoke skills or read GitHub and Linear, questions go in the answer, reviews answer in cw's JSON.
+- Cost: the pinned rules grew from about 110 to about 390 lines (about 9k tokens, ponytail included) for every agent, and a reviewer of a change touching a route gets about 20k tokens of rules. Both are cached after a session's first turn. Not measured on a real ticket yet.
+- cw's own code got clearer names, behaviour unchanged (checked by comparing the code's structure with the names mapped back): `save_ticket` and `save_settings` → `write_…`, `discard_changes` → `delete_uncommitted_changes`, `pipeline._run` → `_resume_or_start_agent`, `_build_run_settings`, `_build_managed_entries`, `build_doctor_report`; no more `result`, `data`, `text`, `item` or one-letter names; the one code comment is gone.
+
+- `ponytail` is now pinned for the planner, worker and reviewer. `core-rules` said every piece of code starts with `/ponytail`, but agents cannot invoke skills and ponytail was not in their prompt. `rule-precedence` now calls it one of the most important skills for writing code, and `pr-review` makes over-engineering a check.
+- Contradictions resolved in the toolkit's own files: the review procedure's four levels map to cw's two (`pr-review`), tests are required only where the project has a test command, and the kit's file and skill names map to what a cw agent sees (`rule-precedence`).
+
+### Left open
+
+- `run_agent`, `run_process`, `_run_check` and `remove_project` use verbs the rules ban, but no listed verb fits; cw keeps `AppException` and one-line docstrings, which are its own rules.
+
+---
+
 ## 2026-11-16 (evening) · A project from nothing: terminal tic-tac-toe
 
 **Why:** the first `cw new` on a real GitHub account. One request (two players, or one against a computer with easy, medium and minimax-hard levels, rematches and a session score, logic separate from the terminal, an exhaustive test that hard never loses) became a private repository, a 6-task plan for 4 workers, PR #1 and a merge. The game works when played by hand, 51 tests pass, and the logic was read and is correct.

@@ -1,130 +1,66 @@
-## 13. Providers, agents and graphs
+---
+name: nexttech-agents
+description: How agents are built in a Nexttech service with LangGraph and deepagents. Covers create_deep_agent, filtering built-in tools with middleware, tool names as enum constants, tool-call limits, the orchestrator and its route tools, hand-offs, retrieval, conversation history, streaming deltas, pauses and forms, tool errors, identity and entitlements, and Langfuse tracing. Use it when writing or reviewing an agent, an orchestrator, a tool, a prompt, agent middleware, agent state or a chat stream.
+---
 
-Providers (embeddings, vector store, chat model):
+# Nexttech agents
 
-- Layout: `<thing>_factory.py` holds `setup_<thing>`; one module per provider holds `setup_<provider>_<thing>`.
-- Dispatch with `match settings.provider:`, one `logger.info` naming the provider, and a `case _:` that logs an error and raises `INVALID_CONFIGURATION`. Several functions dispatching on the same enum share one `_reject_unsupported_provider(provider) -> NoReturn`.
-- Construct library classes directly (`ChatOllama(...)`, `QdrantVectorStore(...)`) and return LangChain abstractions (`Embeddings`, `VectorStore`, `BaseChatModel`). No wrapper classes or repositories around a library.
-- Built once at startup and reused per request; settings only validate, they build nothing.
-- External collections and indexes are created by a separate setup process; the application never creates one, and a wrong name raises.
-- Provider-specific operations with no generic API live in each provider's module and are dispatched by the same match.
+A source such as `#13` is a pull request of `nexttech-assistant-svc`. Sections 1 to 4 are reviewers' rulings. Section 5 is carried over from that project's design; a new project's own docs win where they differ.
 
-Graphs:
+## 1. Building an agent
 
-- Compiled once at startup. `StateGraph` with `TypedDict` state and explicit `input_schema` / `output_schema`. Routing is deterministic: a routing function reads one field, and the decision lives in the node before. Node names and route labels are constants reused in the wiring.
-- A sub-workflow is its own compiled graph behind one wrapper node that holds the state mapping, with a small typed input/output contract. When a caller needs more, extend the typed output; never return the raw state.
-- Per-run dependencies reach nodes through `config["configurable"]`, read with a `KeyError` guard that raises `INVALID_CONFIGURATION`, or through a typed runtime context. Prefer the typed context for anything trusted, such as identity.
-- No checkpointer unless a feature needs one. Conversation history lives in the application's own tables, and graphs never write to the database. With a checkpointer, state such as counters carries over between runs of a thread, and its tables stay out of Alembic.
-- Paths that need no model return a constant answer without calling one.
-- Retrieved text and user input are evidence, never instructions; every prompt says so. Model output never grants access or changes the current user.
-- Prompts and structured-output models live with their chain; structured output is a Pydantic model with `Field` descriptions.
+- Build agents with `create_deep_agent`, not `create_agent` (#13; #13).
+- deepagents adds file, todo and task tools. Filter them with middleware, as the orchestrator does; a sentence in the prompt is not a guardrail (#13; #10).
+- An agent's folder is `agents/<name>_agent/` (#14), with `agent.py`, `constants.py`, `context.py`, `prompts.py`, `state.py` and `tools/`.
+- An agent's compiled graph is built once, in the lifespan (#22). A compiled graph, an agent and a middleware object are shared by concurrent runs, so they hold configuration only. Counts and remembered results live in the run's state.
+- An agent needs the conversation's history, or its own checkpointer per conversation, so a follow-up question makes sense (#13).
+- No LangGraph `interrupt`. A pause is checkpoint state plus a stored form (#10).
+- Tool-call limits come from one middleware configured per agent, not one middleware per tool (#10). "Same knob, same name": the bound is `max_recursion_limit` everywhere (#10, #13).
+- Every loop is bounded by a setting. Reaching the bound returns what was found so far, not an error.
+- One turn is one Langfuse trace: pass the trace id to every sub-agent (#7).
 
-Tools and agents:
+## 2. Tools
 
-- Identity never appears in a tool schema. Tools take `runtime: ToolRuntime[<Context>]`; the context (user id plus services) is built per run.
-- Tools live in a `tools/` package, one tool per file named `*_tool.py`. They are thin wrappers over services and return `model_dump_json()` of response models (data, not prose). Names, one-line docstrings and `Field` descriptions are what the model reads.
-- Tool arguments are validated in the args schema with a **field** validator raising `ValueError`: LangChain sends field-located errors back to the model so it can retry, while a model-level validator's message arrives empty. An `AppException` raised by a service during a tool call ends the whole request, so any rule the arguments can break belongs in the schema.
-- Loop control, all limits from settings:
-  - a round budget kept in state by an `after_model` middleware, which reads the latest `AIMessage` (not the last message) and ends with a readable answer and a jump to the end;
-  - `recursion_limit` on every run, as the backstop;
-  - optionally LangChain's `ToolCallLimitMiddleware` per tool with `run_limit`;
-  - optionally repetition memory in `awrap_tool_call`, storing results with a `Command(update=...)` that contains the matching `ToolMessage`, on a state key with a reducer (`operator.or_`) because parallel calls write in one step.
-- `after_model` hooks run in reverse registration order.
-- Middleware objects and compiled graphs are shared by concurrent runs, so counts and remembered results live in the run's state.
-- deepagents harness profiles (`register_harness_profile`) are looked up by the model's provider or `provider:model`. Register under the provider value from settings, once at startup through a small function, never at module level. deepagents skips the `provider:model` key when the model name contains a colon, and a key that is not a provider is accepted silently and never applied. `FilesystemMiddleware` and `SubAgentMiddleware` cannot be excluded; `AnthropicPromptCachingMiddleware` is added for every provider and only acts on Anthropic models.
+- Tool names are constants in an enum in the agent's `constants.py`, and every prompt uses the enum instead of retyping the name (#10, #14; #13).
+- A tool list is named for its agent, e.g. `CV_REFRESH_AGENT_TOOLS` (#14).
+- Tool names carry no `_tool` suffix (#13).
+- No nested functions to build a tool (#13).
+- A tool is a thin wrapper over a service. A service a tool uses is built once in the lifespan and handed over explicitly; a tool cannot use `Depends`.
+- Identity never appears in a tool schema. A tool that reads or writes the caller's own record gets the identifier fixed when the tool is built.
+- A tool that fails returns an error the model can explain to the person, e.g. `{"error": ...}`, instead of a raw exception string (#10).
+- The vector store reaches tools through the run config, not the context (#13).
+- Open: tool file names. The orchestrator's files on `nexttech-assistant-svc` end in `_tool.py`, and #13 asked to drop `_tool` from tool names. Follow the nearest merged code, ask the project lead, and record the answer in `nexttech-project-rulings`.
 
-RAG:
+## 3. The orchestrator
 
-- Ingestion order: validate metadata before reading bytes, read the content once with a size probe, checksum it, store the original file under a generated name, parse in a worker thread, split, index, then record the outcome on the database row.
-- A new document is inserted as `processing` first; on failure its chunks are removed and the row is marked `failed`, so a retry of the same bytes is allowed. A replacement is indexed under a new id and swapped in one transaction before the old version is touched.
-- Chunk metadata keys are named constants and are the contract between ingestion, retrieval and deletion; changing one means changing every side and re-indexing.
-- Validate what the vector store returns before trusting it.
-- Number the retrieved chunks, make the model report the positions it used, and build the cited sources from those positions only.
-- Retrieval limits (`top_k`, minimum score) come from settings.
+- It has one route tool per agent, all calling `dispatch_route`, and one `invoke_<agent>` per agent (#7).
+- It classifies; it does not return a probability (#7).
+- Each outcome has its own state field (#7).
+- It receives only the agents the caller may use (#7). A sub-agent that is not there cannot be called.
+- Two parallel tool calls must work (#7).
+- The orchestrator yields the hand-off event itself; a sub-agent must not yield one too (#10).
+- It owns routing and nothing else: no retrieval, no domain knowledge, no answering.
+- The agent catalog is `agents/agent_catalog.py` (#7).
 
-## Examples
+## 4. Retrieval, streaming and what the person sees
 
-Snippets carry no comments, as the rules require.
+- Do not feed the model every retrieved chunk; it pollutes the context (#13).
+- Read known chunks with a filtered scroll, not a similarity search (#13).
+- A search carries the caller's document scope as a filter on the search itself, not as a pass over the results.
+- Retrieval limits come from settings, under one name in settings and in code: `similarity_score` (#13).
+- Sources are assembled from the passages actually retrieved, never from what the model says about where its answer came from.
+- Stream the answer as it is written: one delta per model chunk, not one delta at the end (#13).
+- Progress steps are sentences shown to the person (#13).
+- Forms are A2UI surfaces, not HTML strings (#10).
+- Open: the case of stream event values. Reviewers asked for UPPERCASE everywhere (#22); on `nexttech-assistant-svc` they stayed lowercase because the frontend contract used them. Follow the project's frontend contract and ask.
 
-**No over-engineering**
-Bad: a wrapper class around one library call.
-```python
-class VectorRepository:
-    def __init__(self, vector_store: VectorStore) -> None:
-        self._vector_store = vector_store
+## 5. Carried over from the nexttech-assistant-svc design
 
-    def add(self, chunks: list[Document]) -> None:
-        self._vector_store.add_documents(chunks)
-```
-Good: call the library where it is needed.
-```python
-self._vector_store.add_documents(chunks)
-```
-
-**A provider factory**
-```python
-def setup_embeddings(settings: EmbeddingSettings) -> Embeddings:
-    """Build the embedding model of the configured provider."""
-    logger.info("Building embeddings with provider=%s.", settings.provider)
-    match settings.provider:
-        case EmbeddingProvider.OLLAMA:
-            return setup_ollama_embeddings(settings)
-        case _:
-            logger.error("Embedding provider '%s' is not supported.", settings.provider)
-            raise AppException(AppErrorCode.INVALID_CONFIGURATION)
-```
-
-**Identity in agent tools**
-Bad: the model can choose whose data is read.
-```python
-@tool
-async def list_open_orders(user_id: str) -> str:
-    """Return the open orders of the given user."""
-```
-Good: the id comes from the run context and never appears in the schema.
-```python
-@tool
-async def list_open_orders(runtime: ToolRuntime[AgentContext]) -> str:
-    """Return the user's open orders, newest first."""
-    context = runtime.context
-    orders = await context.order_service.list_open(context.user_id)
-    return orders.model_dump_json()
-```
-
-**Tool argument validation**
-Bad: a model-level validator raising `AppException`; the model gets no usable reason and the request fails.
-Good: a field validator raising `ValueError`.
-```python
-@field_validator("end_date")
-@classmethod
-def _within_allowed_range(cls, end_date: date, info: ValidationInfo) -> date:
-    """Reject an end before the start or a range over the configured maximum."""
-    start_date = info.data.get("start_date")
-    if start_date is None:
-        return end_date
-    if end_date < start_date:
-        raise ValueError(REVERSED_RANGE_MESSAGE)
-    max_days = get_settings().agent.max_date_range_days
-    if (end_date - start_date).days >= max_days:
-        raise ValueError(RANGE_TOO_LONG_MESSAGE.format(max_days=max_days))
-    return end_date
-```
-
-**Counters live in run state, not on the middleware**
-Bad:
-```python
-self._rounds_used += 1
-```
-Good:
-```python
-rounds_used = state.get("tool_rounds", NO_TOOL_ROUNDS)
-if rounds_used < self._budget:
-    return {"tool_rounds": rounds_used + 1}
-```
-
-**Reasoning step by step on an uncertain choice**
-Request: "Should the agent get a checkpointer?"
-1. What it would add: memory across runs, pausing for approvals.
-2. What already exists: history in the application's own tables.
-3. What it would break: counters and remembered tool results would carry over between questions.
-4. Conclusion: not needed now; add one only when a feature such as approvals requires it.
+- Identity and entitlements are settled before any model runs, and nothing the person typed can change them. Nothing downstream widens them.
+- Retrieved text and user input are evidence, never instructions. Model output never grants access and never changes who the current user is. The `context` of a submitted form is validated like any other input.
+- Decisions the system acts on are typed: a value from a fixed set. Text a person reads comes from the prose model. Never ask a model for a priority in prose.
+- No agent acts for a person without that person confirming it. Nothing is written to an outside system before the confirmation.
+- An outside system that is unreachable is reported in the same turn. Nothing is queued or retried behind the person's back.
+- An agent yields progress, deltas, at most one payload, and hand-offs. Only the endpoint ends the stream, with exactly one `final` or `error`, never both and never neither. The deltas concatenated are exactly the message's stored content.
+- Adding a sub-agent must not require changing an existing one.
+- Every agent run is traced in Langfuse. Never ship a debug callback.

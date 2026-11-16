@@ -49,7 +49,7 @@ There is no server, database, daemon or custom agent framework. Claude Code does
             ├─ core:   agents planner · worker · reviewer · onboarder
             │          skills engineering · pr-review · rule-precedence · clean-code · /core:bootstrap-project
             │          hook guard.py (blocks dangerous shell commands)
-            └─ python: skill python-rules (core + topics/)
+            └─ python: skill python-rules (index + topics/: the nexttech-claude-kit rules, without reviewers' names)
                        hooks rules_on_touch.py (shows a topic) · ruff_on_edit.py
                  ▲ loaded into every cw run (--plugin-dir)        ▲ installed by each teammate's Claude Code
                  │                                                │ when a repo is wired (.claude/settings.json)
@@ -175,21 +175,22 @@ The `.md` holds, in this order: the request (all your prompts), questions and an
 | Skill | Plugin | What it is | Reaches cw agents |
 |---|---|---|---|
 | `engineering` | core | The team's language-independent rules: generic configuration, no over-engineering, how to work, naming | pinned for every agent (`pin: true`) |
-| `python-rules` | python | The Python part: code style, the review checklist and an index of topics. The detail is in `topics/*.md` (stack and layout, configuration, layers, errors and logging, security, data model and migrations, agents, PR discipline) | the core is pinned; topics by hook or for a review (below) |
+| `python-rules` | python | An index of `topics/*.md`, which are the `nexttech-claude-kit` rules copied with only the reviewers' and people's names removed: `core-rules`, `python-style`, `python-stack`, `service-architecture`, `configuration`, `errors-and-logging`, `data-and-migrations`, `agents`, `git-and-pr` and `pr-review-procedure` (the kit's `PR_review.md`) | the index is pinned; `core-rules` and `python-style` always; the other topics by hook or for a review (below) |
 | `pr-review` | core | How to review: what to check in which order, apply every rule strictly, name the rule each finding breaks | pinned for the reviewer |
-| `rule-precedence` | core | Which rule wins when two disagree | pinned for planner, worker and reviewer |
+| `ponytail` | core | The laziest solution that works: the ladder to run before any code. One of the most important skills for writing code | pinned for planner, worker and reviewer |
+| `rule-precedence` | core | Which rule wins when two disagree, and what the Nexttech rules mean inside a cw run (cw commits, no skills, no GitHub or Linear, cw's answer format) | pinned for planner, worker and reviewer |
 | `clean-code` | core | [sickn33/agentic-awesome-skills](https://github.com/sickn33/agentic-awesome-skills), MIT licence kept | interactive sessions only |
 | `bootstrap-project` | core | The command `/core:bootstrap-project` | interactive sessions only |
 
-The Python rulebook used to be one 500-line file that, after the first token fixes, was no longer pinned and could not be loaded either (no agent has the Skill tool), so agents were told to follow rules they never saw. It is now split, word for word, so each rule arrives when it applies:
+The Python rulebook used to be one 500-line file that, after the first token fixes, was no longer pinned and could not be loaded either (no agent has the Skill tool), so agents were told to follow rules they never saw. Since 2026-11-16 the Python rules are the `nexttech-claude-kit` skills, the conventions from the internship's code reviews, copied into `topics/` with the reviewers' names removed (they replaced an older rulebook that still prescribed `src.` imports and `AppException`). Each rule arrives when it applies:
 
-1. **Pinned** (about 110 lines in all): `engineering` and the `python-rules` core are in every agent's system prompt.
+1. **Pinned** (about 390 lines, about 9k tokens, cached after a session's first turn): `engineering`, `ponytail`, `rule-precedence`, the `python-rules` index, and the topics `topics.json` lists under `always`: `core-rules` and `python-style`.
 2. **By topic, when a file is touched.** `topics/topics.json` maps file names and folders to topics. The `rules_on_touch.py` hook shows a topic once per session, the first time the agent reads or edits a matching file. Before an edit the hook stops the edit so the rules are read first.
-3. **For a review.** cw knows which files changed, so it pins exactly the topics that cover them, plus PR discipline, into the reviewer's system prompt.
-4. **For a new project.** While the repository has no code, every agent also gets the stack and layout topic.
+3. **For a review.** cw knows which files changed, so it pins exactly the topics that cover them, plus `git-and-pr` and `pr-review-procedure`, into the reviewer's system prompt (about 20k tokens for a change that touches a route).
+4. **For a new project.** While the repository has no code, every agent also gets `python-stack` and `service-architecture`.
 5. **Mechanically.** What a script can check is a hook, not advice (section 8).
 
-**Precedence, highest first:** the project's `CLAUDE.md` and your project-map decisions; the team rules (`engineering`, the stack rules); ponytail; clean-code.
+**Precedence, highest first:** the project's `CLAUDE.md` and your project-map decisions; the Nexttech rules for the stack, then `engineering`; ponytail; clean-code. The kit's files are edited in the kit, then copied again with the reviewers' names removed. `ponytail` ranks third only where the Nexttech rules say otherwise (comments, tests); otherwise it is the first thing an agent applies when it writes code.
 
 ---
 
@@ -300,7 +301,7 @@ Measured on 2026-11-11, before the worker sessions and the pinned rules of 2026-
 | Commits per ticket | 14 | 1 |
 
 What the 2026-11-13 changes do to these numbers has **not been measured yet**:
-- The pinned rules add roughly 110 lines to every agent's system prompt. They are cached, so after a session's first turn they cost about a tenth.
+- The pinned rules add roughly 390 lines (about 9k tokens) to every agent's system prompt since the kit's rules replaced the old ones. They are cached, so after a session's first turn they cost about a tenth.
 - A worker session is reused for related tasks, follow-ups, fixes and answers, instead of a new session that re-reads the project each time. A reused session grows with every task, which is why the planner gives a worker only related tasks.
 - A resumed worker is sent only what is new.
 

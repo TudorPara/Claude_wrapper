@@ -9,7 +9,7 @@ A workflow around Claude Code for a small team: a shared **toolkit** of agents, 
 | `backend/src/cw/` | `cli.py` commands · `pipeline.py` the ticket flow · `prompts.py` what each agent is told · `claude_runner.py` one `claude -p` run · `process.py` child processes with a time limit · `tickets.py` ticket files · `project_memory.py` notes in a project's `CLAUDE.md` · `repo_map.py` the planner's map of a repository · `git.py` · `onboarding.py` projects · `config.py` · `toolkit.py` reads the toolkit |
 | `backend/tests/` | `conftest.py` has `FakeAgents`, which stands in for `claude -p` |
 | `toolkit/plugins/core/` | agents `planner`, `worker`, `reviewer`, `onboarder`; skills; `scripts/guard.py` |
-| `toolkit/plugins/python/` | skill `python-rules` (core `SKILL.md` + `topics/`), hooks `rules_on_touch.py`, `ruff_on_edit.py` |
+| `toolkit/plugins/python/` | skill `python-rules` (index `SKILL.md` + `topics/`, the nexttech-claude-kit rules without reviewers' names), hooks `rules_on_touch.py`, `ruff_on_edit.py` |
 | `friday/Sources/Friday/` | the SwiftUI app; it only runs `cw` and decodes its `--json` output |
 
 ## Commands

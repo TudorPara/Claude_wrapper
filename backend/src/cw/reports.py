@@ -99,7 +99,7 @@ def _installed_plugins(settings: Settings) -> set[str]:
     return {entry.get("id") or f"{entry.get('name')}@{entry.get('marketplace')}" for entry in entries}
 
 
-def doctor(settings: Settings) -> list[tuple[str, str, str]]:
+def build_doctor_report(settings: Settings) -> list[tuple[str, str, str]]:
     """Return (check, status, hint) rows for everything cw relies on."""
     rows = []
     for binary in (settings.claude_binary, "git", "uv"):

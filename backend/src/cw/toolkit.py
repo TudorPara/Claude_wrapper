@@ -19,6 +19,7 @@ SKILLS_DIR = "skills"
 SKILL_FILE = "SKILL.md"
 TOPICS_DIR = "topics"
 TOPICS_INDEX = "topics.json"
+ALWAYS_KEY = "always"
 NEW_PROJECT_KEY = "new_project"
 REVIEW_KEY = "review"
 TOPICS_KEY = "topics"
@@ -54,11 +55,11 @@ class SkillDefinition(BaseModel):
     path: str
 
 
-def _split_front_matter(text: str) -> tuple[dict, str]:
+def _split_front_matter(markdown_text: str) -> tuple[dict, str]:
     """Return the YAML front matter and the body of a markdown file."""
-    if not text.startswith(FRONT_MATTER_FENCE):
-        return {}, text
-    _, front, body = text.split(FRONT_MATTER_FENCE, 2)
+    if not markdown_text.startswith(FRONT_MATTER_FENCE):
+        return {}, markdown_text
+    _, front, body = markdown_text.split(FRONT_MATTER_FENCE, 2)
     return yaml.safe_load(front) or {}, body.strip()
 
 
@@ -67,8 +68,8 @@ def _as_list(value: str | list | None) -> list[str]:
     if value is None:
         return []
     if isinstance(value, list):
-        return [str(item).strip() for item in value]
-    return [item.strip() for item in str(value).split(LIST_SEPARATOR) if item.strip()]
+        return [str(entry).strip() for entry in value]
+    return [entry.strip() for entry in str(value).split(LIST_SEPARATOR) if entry.strip()]
 
 
 def plugin_dir(settings: Settings, plugin: str) -> Path:
@@ -161,15 +162,17 @@ def pinned_topics(
 ) -> dict[str, str]:
     """Return, by name, the topic texts of a rules skill that go into the system prompt for this run.
 
-    While the project has no code yet: the topics listed under `new_project`. For a review: the topics
-    listed under `review` and every topic that covers a changed file, so the reviewer has the exact rules.
+    Always: the topics listed under `always`. While the project has no code yet: those under `new_project`.
+    For a review: those under `review` and every topic that covers a changed file, so the reviewer has the exact rules.
     """
     folder = _skill_folder(settings, reference) / TOPICS_DIR
     index_file = folder / TOPICS_INDEX
     if not index_file.exists():
         return {}
     index = json.loads(index_file.read_text())
-    names = list(index.get(NEW_PROJECT_KEY, [])) if new_project else []
+    names = list(index.get(ALWAYS_KEY, []))
+    if new_project:
+        names += index.get(NEW_PROJECT_KEY, [])
     if review_files is not None:
         names += index.get(REVIEW_KEY, [])
         paths = [PurePosixPath(file) for file in review_files]

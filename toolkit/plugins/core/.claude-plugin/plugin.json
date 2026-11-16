@@ -1,6 +1,6 @@
 {
   "name": "core",
-  "version": "0.2.2",
+  "version": "0.3.1",
   "description": "Stack-independent agents, skills, commands and guard hook shared by every Nexttech project.",
   "author": {
     "name": "Nexttech"

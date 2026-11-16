@@ -83,7 +83,7 @@ def switch(cwd: Path, branch: str) -> None:
     git(cwd, "switch", branch)
 
 
-def discard_changes(cwd: Path) -> None:
+def delete_uncommitted_changes(cwd: Path) -> None:
     """Throw away every uncommitted change and untracked file in the checkout."""
     git(cwd, "reset", "--hard")
     git(cwd, "clean", "-fd")

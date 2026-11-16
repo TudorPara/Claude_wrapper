@@ -1,42 +1,49 @@
 {
+  "always": [
+    "core-rules",
+    "python-style"
+  ],
   "new_project": [
-    "stack-layout"
+    "python-stack",
+    "service-architecture"
   ],
   "review": [
-    "git-pr"
+    "git-and-pr",
+    "pr-review-procedure"
   ],
   "topics": {
-    "stack-layout": [
+    "python-stack": [
       "pyproject.toml",
-      "docker-compose.yml",
-      ".python-version"
+      "uv.lock",
+      "Makefile",
+      ".python-version",
+      "docker-compose.yml"
     ],
-    "configuration": [
-      "config.py",
-      "settings.py",
-      ".env.example"
-    ],
-    "layers": [
+    "service-architecture": [
+      "api/",
       "routes/",
       "services/",
       "repositories/",
       "entry_point/",
       "dependencies.py",
-      "lifespan.py"
-    ],
-    "errors-logging": [
-      "errors.py",
-      "exceptions.py",
-      "logging_config.py",
-      "middleware.py"
-    ],
-    "security": [
-      "core/",
-      "middleware.py",
-      "cookies.py",
+      "lifespan.py",
+      "middleware/",
       "*auth*"
     ],
-    "data-api": [
+    "configuration": [
+      "configuration/",
+      "config.py",
+      "settings.py",
+      ".env.example"
+    ],
+    "errors-and-logging": [
+      "exceptions/",
+      "errors.py",
+      "exceptions.py",
+      "exception_handlers.py",
+      "logging_config.py"
+    ],
+    "data-and-migrations": [
       "schemas/",
       "models/",
       "database/",
@@ -44,6 +51,7 @@
       "alembic.ini"
     ],
     "agents": [
+      "agents/",
       "graphs/",
       "llm/",
       "embeddings/",
@@ -51,6 +59,7 @@
       "chains/",
       "*_tool.py"
     ],
-    "git-pr": []
+    "git-and-pr": [],
+    "pr-review-procedure": []
   }
 }

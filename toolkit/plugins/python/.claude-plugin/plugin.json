@@ -1,7 +1,7 @@
 {
   "name": "python",
-  "version": "0.2.1",
-  "description": "Python stack rules and a ruff hook.",
+  "version": "0.3.1",
+  "description": "The Nexttech Python rules (from nexttech-claude-kit) and a ruff hook.",
   "author": {
     "name": "Nexttech"
   }

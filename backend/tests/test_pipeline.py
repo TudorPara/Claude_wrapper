@@ -4,11 +4,11 @@ import pytest
 from conftest import FakeAgents, FakeHost, answer, git, make_repository, usage
 
 from cw import onboarding, pipeline, reports
-from cw.config import AgentRole, get_settings, save_settings
+from cw.config import AgentRole, get_settings, write_settings
 from cw.errors import AppErrorCode, AppException
 from cw.git_hosts.base import PullRequestThread
 from cw.models import ReviewComment, ReviewerResult, Severity, Step, TicketStatus, Verdict, WorkerResult, WorkerStatus
-from cw.tickets import find_ticket, save_ticket, ticket_path
+from cw.tickets import find_ticket, ticket_path, write_ticket
 
 WORKER = AgentRole.WORKER
 
@@ -189,7 +189,7 @@ def test_a_ticket_left_in_progress_by_a_killed_process_can_be_resumed(
 ) -> None:
     ticket = pipeline.start_ticket("demo", "two steps", plan_first=True)
     ticket.status = TicketStatus.IN_PROGRESS
-    save_ticket(ticket)
+    write_ticket(ticket)
     assert pipeline.resume(ticket.id).tasks_done == ["S1", "S2"]
 
 
@@ -344,7 +344,7 @@ def test_files_the_checks_leave_behind_are_reported_on_the_ticket(workspace: Pat
     make_repository(workspace, with_remote=False)
     settings = get_settings()
     settings.project("demo").commands.test = "touch report.xml"
-    save_settings(settings)
+    write_settings(settings)
     ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
     assert any("left files behind (report.xml)" in warning for warning in ticket.warnings)
 
@@ -361,7 +361,7 @@ def test_git_decides_which_files_a_worker_changed_and_an_empty_done_is_flagged(
 def test_a_task_that_changes_files_outside_its_list_is_flagged(local_repository: Path, agents: FakeAgents) -> None:
     ticket = pipeline.start_ticket("demo", "two steps", plan_first=True)
     ticket.subtasks[0].files = ["planned.txt"]
-    save_ticket(ticket)
+    write_ticket(ticket)
     done = pipeline.approve(ticket.id)
     assert "Scope: S1: worker W1 changed files outside its task: work_1.txt" in done.warnings
     assert not any(warning.startswith("Scope: S2") for warning in done.warnings)
@@ -371,7 +371,7 @@ def test_a_file_the_task_instructions_name_is_in_scope(local_repository: Path, a
     ticket = pipeline.start_ticket("demo", "two steps", plan_first=True)
     ticket.subtasks[0].files = ["planned.txt"]
     ticket.subtasks[0].instructions += "\nYou may also edit work_1.txt."
-    save_ticket(ticket)
+    write_ticket(ticket)
     done = pipeline.approve(ticket.id)
     assert not any(warning.startswith("Scope:") for warning in done.warnings)
 
@@ -380,7 +380,7 @@ def test_stats_count_a_resumed_session_once(local_repository: Path, agents: Fake
     ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
     costs = [(WORKER, "w", 1.0), (WORKER, "w", 1.5), (AgentRole.REVIEWER, "r", 0.5), (WORKER, "w2", 0.25)]
     ticket.runs = [usage(role, session).model_copy(update={"cost_usd": cost}) for role, session, cost in costs]
-    save_ticket(ticket)
+    write_ticket(ticket)
     spent = {row["role"]: row["cost_usd"] for row in reports.usage_stats(get_settings())}
     assert spent == {"worker": 1.75, "reviewer": 0.5}
 
@@ -486,7 +486,7 @@ def test_merge_refuses_until_ci_passed_and_no_blocking_finding_is_left(
 
     stored = find_ticket(ticket.id)
     stored.reviews = []
-    save_ticket(stored)
+    write_ticket(stored)
     host.ci = False
     with pytest.raises(AppException, match="CI has not passed"):
         pipeline.merge_pull_request(ticket.id)

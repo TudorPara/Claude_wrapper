@@ -63,7 +63,7 @@ def read_ticket(path: Path) -> Ticket:
     return Ticket.model_validate_json(path.read_text())
 
 
-def save_ticket(ticket: Ticket) -> None:
+def write_ticket(ticket: Ticket) -> None:
     """Write the ticket (through a temporary file, so a reader never sees half of it) and its readable .md twin."""
     ticket.updated_at = utc_now()
     path = ticket_path(ticket.project, ticket.id)
@@ -186,7 +186,9 @@ def ticket_markdown(ticket: Ticket, full: bool = True) -> str:
     if full:
         for review in ticket.reviews:
             lines += ["", f"## Review {review.round} by {review.reviewer}: {review.verdict}", "", review.summary]
-            lines += [f"- `{c.path}:{c.line}` ({c.severity}) {c.body}" for c in review.comments]
+            lines += [
+                f"- `{comment.path}:{comment.line}` ({comment.severity}) {comment.body}" for comment in review.comments
+            ]
     return "\n".join(lines) + "\n"
 
 

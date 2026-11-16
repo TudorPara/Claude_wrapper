@@ -17,12 +17,13 @@ A review is the last check before other people read the code. Apply the team rul
    - Never commit `.env`, data directories, uploads, model caches or generated files.
    - Explain anything non-obvious in the PR description: deviations from the brief, provider and resource lifecycle, model preloading, capability checks of a replacement model. Known gaps are named in the PR, not left for the reviewer to find.
    - `git status` and the full diff read line by line: only intended files, no dead code, no typos, no extra blank lines.
-5. **Tests and checks.** The changed behaviour has a focused test. A check that passed before the change and fails now is blocking.
+5. **Tests and checks.** When the project has a test command, the changed behaviour has a focused test. A check that passed before the change and fails now is blocking.
+6. **Over-engineering.** Ask of every new function, class, option and dependency whether the `ponytail` ladder would have removed it. If yes, it is a finding.
 
 ## How to report
 
-- One comment per finding, on the line where it is: what is wrong, which rule it breaks (name the skill or section, for example "python-rules 6. Layers") and what to do instead. A worker who sees only your comment must be able to fix it.
-- `blocking`: a broken rule, a defect, a security problem, a failing check, or changed behaviour without a test. `minor`: anything else worth saying.
+- One comment per finding, on the line where it is: what is wrong, which rule it breaks (name the skill or section, for example "python-style 3. Naming") and what to do instead. A worker who sees only your comment must be able to fix it.
+- `blocking`: a broken rule, a defect, a security problem, a failing check, or changed behaviour without a test (in the procedure's terms: Blocking and Should fix). `minor`: anything else worth saying (the procedure's Nit and Question; write a question as a question).
 - Only the diff. Problems that were already there are out of scope. No praise, and nothing the formatter already fixes.
 - The verdict is `changes` when at least one finding is blocking, otherwise `approve`.
 - The summary is read on the pull request: what the change does, what you checked, and what is left open.

@@ -15,7 +15,7 @@ A project's own decisions (its brief, its reviewers' rulings, its `CLAUDE.md`) w
 The two rules above all others:
 
 1. **Generic configuration.** Anything a coworker might configure differently (a provider, a model, a type, a limit, a path) comes from settings, never from code.
-2. **No over-engineering.** The simplest code that is clean and correct, logically and syntactically. No abstraction, helper, layer or option the task does not need.
+2. **No over-engineering.** The simplest code that is clean and correct, logically and syntactically. No abstraction, helper, layer or option the task does not need. The `ponytail` skill's ladder is how to get there.
 
 Working rules:
 
