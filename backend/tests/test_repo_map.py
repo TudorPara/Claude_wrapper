@@ -1,11 +1,18 @@
+import subprocess
 from pathlib import Path
 
 from cw.models import ContextAnchor, Route, Ticket, TicketStatus, utc_now
 from cw.prompts import _context_pack
-from cw.repo_map import generate_repo_map, write_project_repo_map
+from cw.repo_map import MAX_MAP_LINES, generate_repo_map, write_project_repo_map
+
+
+def repository(path: Path) -> Path:
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    return path
 
 
 def test_repo_map_extracts_python_classes_and_functions(tmp_path: Path) -> None:
+    repository(tmp_path)
     source_file = tmp_path / "service.py"
     source_file.write_text(
         '"""Order processing service."""\n\n'
@@ -21,6 +28,10 @@ def test_repo_map_extracts_python_classes_and_functions(tmp_path: Path) -> None:
 
 
 def test_repo_map_ignores_hidden_and_venv_directories(tmp_path: Path) -> None:
+    repository(tmp_path)
+    (tmp_path / ".gitignore").write_text("generated/\n")
+    (tmp_path / "generated").mkdir()
+    (tmp_path / "generated" / "out.py").write_text("def ignored_by_git(): pass")
     venv_dir = tmp_path / ".venv" / "lib"
     venv_dir.mkdir(parents=True)
     (venv_dir / "ignored.py").write_text("def should_not_appear(): pass")
@@ -31,18 +42,30 @@ def test_repo_map_ignores_hidden_and_venv_directories(tmp_path: Path) -> None:
 
     result = generate_repo_map(tmp_path)
     assert "should_not_appear" not in result
+    assert "ignored_by_git" not in result
     assert "main.py" in result
 
 
 def test_repo_map_writes_to_target_file(tmp_path: Path) -> None:
     project_dir = tmp_path / "project"
-    project_dir.mkdir()
+    repository(project_dir)
     (project_dir / "mod.py").write_text("def hello(): pass")
 
     output_path = tmp_path / "output" / "map.txt"
     content = write_project_repo_map(project_dir, output_path)
     assert output_path.exists()
     assert output_path.read_text(encoding="utf-8") == content
+
+
+def test_a_large_repository_keeps_every_folder_by_using_less_detail(tmp_path: Path) -> None:
+    repository(tmp_path)
+    for folder in ("alpha", "zeta"):
+        (tmp_path / folder).mkdir()
+        for number in range(MAX_MAP_LINES // 4):
+            (tmp_path / folder / f"m{number}.py").write_text("def a(): pass\ndef b(): pass\ndef c(): pass\n")
+    result = generate_repo_map(tmp_path)
+    assert len(result.splitlines()) <= MAX_MAP_LINES
+    assert "[zeta]" in result and "m0.py: a(), b(), c()" in result
 
 
 def test_context_pack_rendering() -> None:

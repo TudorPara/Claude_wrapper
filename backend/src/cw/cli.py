@@ -8,7 +8,7 @@ import sys
 from importlib import resources
 from pathlib import Path
 
-from cw import onboarding, pipeline, reports, repo_map
+from cw import onboarding, pipeline, repo_map, reports
 from cw.config import GitHostProvider, config_path, get_settings, repo_map_path, save_settings, validate_config
 from cw.errors import AppException
 from cw.tickets import CLOSED_STATUSES, find_ticket, list_tickets, looks_like_ticket_id, ticket_markdown

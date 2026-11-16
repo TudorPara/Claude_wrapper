@@ -131,6 +131,11 @@ class WorkerResult(BaseModel):
         "anything left open. Empty when there is nothing."
     )
     questions: list[str] = Field(description="Only with status question: what you need answered. Otherwise empty.")
+    project_notes: list[str] = Field(
+        description="Lasting facts a future session in this repository needs and cannot see quickly in the code: "
+        "a command to use, where a kind of code lives, a decision and why, a trap. One line each, at most three. "
+        "Not what you did (that is summary). Empty when there is nothing; cw adds them to the project's CLAUDE.md."
+    )
     commit_message: str
     reason: str
 
@@ -194,6 +199,7 @@ class WorkEntry(BaseModel):
     worker: str = ""
     files: list[str] = []
     handoff: str = ""
+    project_notes: list[str] = []
 
 
 class ReviewEntry(BaseModel):
@@ -222,6 +228,11 @@ class RunUsage(BaseModel):
     cost_usd: float
     duration_ms: int
     num_turns: int
+
+    def context_per_turn(self) -> int:
+        """Return the average context one turn sent, cached or not: the size of the session."""
+        context = self.input_tokens + self.cache_read_tokens + self.cache_creation_tokens
+        return context // max(self.num_turns, 1)
 
 
 class Ticket(BaseModel):

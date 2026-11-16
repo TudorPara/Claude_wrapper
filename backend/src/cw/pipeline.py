@@ -8,7 +8,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from cw import git, prompts, repo_map
+from cw import git, project_memory, prompts, repo_map
 from cw.claude_runner import TICKET_PLACEHOLDER, run_agent
 from cw.config import AgentRole, Project, Settings, get_settings, repo_map_path
 from cw.errors import AppErrorCode, AppException
@@ -56,6 +56,10 @@ PARK_COMMIT_PREFIX = "wip: "
 CHECKS_WARNING = "Checks:"
 FAILING_WARNING = "Checks: now failing"
 SCOPE_WARNING = "Scope:"
+EMPTY_WARNING = "No changes:"
+MEMORY_WARNING = "Memory:"
+MEMORY_MAX_NOTES = 40
+OTHER_WORK = "follow-up"
 ARTIFACTS_SHOWN = 5
 REVIEW_WARNING = "Review:"
 FETCH_WARNING = "Fetch:"
@@ -261,26 +265,31 @@ def _worker(
             else prompts.resumed_worker_prompt(ticket, worker, instruction)
         ),
     )
-    tree_after = git.snapshot(project.path)
-    actual_files = git.changed_files(project.path, tree_before, tree_after)
-    if usage := (ticket.runs[-1] if ticket.runs else None):
-        if usage.input_tokens > WORKER_SESSION_TOKEN_CEILING:
-            logger.info("Worker %s session reached %s tokens; refreshing next turn.", worker, usage.input_tokens)
-            session = ""
-    if session:
-        ticket.worker_sessions[worker] = session
-    else:
+    actual_files = git.changed_files(project.path, tree_before, git.snapshot(project.path))
+    # ponytail: the run's average turn understates its last turn; read per-turn usage from the stream if that matters.
+    size = ticket.runs[-1].context_per_turn()
+    if size > WORKER_SESSION_TOKEN_CEILING:
+        logger.info("Worker %s's session is at about %s tokens a turn; it starts fresh next time.", worker, size)
+    if size > WORKER_SESSION_TOKEN_CEILING or not session:
         ticket.worker_sessions.pop(worker, None)
+    else:
+        ticket.worker_sessions[worker] = session
     ticket.last_worker = worker
     if result.status != WorkerStatus.QUESTION:
-        recorded_files = actual_files or result.files
-        if task and result.status == WorkerStatus.DONE:
-            current_subtask = next((subtask for subtask in ticket.subtasks if subtask.id == task), None)
-            if current_subtask and current_subtask.files:
-                unexpected = sorted(set(actual_files) - set(current_subtask.files))
-                if unexpected:
-                    message = f"Worker {worker} touched undeclared files: {', '.join(unexpected)}"
-                    _set_warning(ticket, SCOPE_WARNING, message)
+        label = task or OTHER_WORK
+        empty = result.status == WorkerStatus.DONE and not actual_files
+        _set_warning(
+            ticket,
+            f"{EMPTY_WARNING} {label}:",
+            f"worker {worker} reported done but changed no files." if empty else None,
+        )
+        planned = next((subtask.files for subtask in ticket.subtasks if subtask.id == task), []) if task else []
+        unexpected = sorted(set(actual_files) - set(planned)) if planned else []
+        _set_warning(
+            ticket,
+            f"{SCOPE_WARNING} {label}:",
+            f"worker {worker} changed files outside its task: {', '.join(unexpected)}" if unexpected else None,
+        )
         ticket.work_log.append(
             WorkEntry(
                 at=utc_now(),
@@ -288,9 +297,18 @@ def _worker(
                 status=result.status,
                 summary=result.summary,
                 worker=worker,
-                files=recorded_files,
+                files=actual_files,
                 handoff=result.handoff,
+                project_notes=result.project_notes,
             )
+        )
+        notes = project_memory.add_notes(project.path, result.project_notes)
+        _set_warning(
+            ticket,
+            MEMORY_WARNING,
+            f"CLAUDE.md holds {notes} cw notes; prune the section '{project_memory.NOTES_HEADING}'."
+            if notes > MEMORY_MAX_NOTES
+            else None,
         )
         if result.commit_message and not ticket.commit_message:
             ticket.commit_message = result.commit_message.splitlines()[0]
@@ -453,7 +471,11 @@ def _direct_pass(settings: Settings, project: Project, ticket: Ticket) -> bool:
 
 
 def _task_passes(settings: Settings, project: Project, ticket: Ticket) -> bool:
-    """Run the plan's unfinished tasks in order, each by its worker; return False when a worker waits for the user."""
+    """Run the plan's unfinished tasks in order, each by its worker and followed by the checks.
+
+    Checking after every task keeps a broken step from becoming the base of the next one.
+    Returns False when a worker waits for the user.
+    """
     while (task := next_task(ticket)) is not None:
         logger.info("Task %s · %s (worker %s)", task.id, task.title, task.worker)
         result = _work_on(settings, project, ticket, task.worker, prompts.task_instruction(task), task.id)
@@ -463,18 +485,22 @@ def _task_passes(settings: Settings, project: Project, ticket: Ticket) -> bool:
             raise AppException(AppErrorCode.AGENT_FAILED, f"Task {task.id} stopped: {result.reason}")
         ticket.tasks_done.append(task.id)
         save_ticket(ticket)
+        _checks_with_fixes(settings, project, ticket)
+        save_ticket(ticket)
     return True
 
 
 def _work(settings: Settings, project: Project, ticket: Ticket, latest_prompt: bool) -> None:
-    """Do the user's latest request when asked, then any unfinished planned tasks, then the checks."""
+    """Do the user's latest request when asked, then any unfinished planned tasks; the checks run after each."""
     ticket.status = TicketStatus.IN_PROGRESS
     save_ticket(ticket)
     if latest_prompt and not _direct_pass(settings, project, ticket):
         return
-    if not _task_passes(settings, project, ticket):
-        return
-    _checks_with_fixes(settings, project, ticket)
+    if _has_unfinished_tasks(ticket):
+        if not _task_passes(settings, project, ticket):
+            return
+    else:
+        _checks_with_fixes(settings, project, ticket)
     ticket.status = TicketStatus.READY
 
 

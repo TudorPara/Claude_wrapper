@@ -33,5 +33,6 @@ Return through the structured output:
 - `files`: every file you created or changed.
 - `handoff`: what the next worker needs to build on your work without re-reading it all: names, signatures, routes, decisions, anything left open. One to five lines; empty when there is nothing.
 - `questions`: your questions when the status is `question`; otherwise empty.
+- `project_notes`: lasting facts a future session in this repository needs and cannot quickly see in the code: a command to use, where a kind of code lives, a decision and its reason, a trap. One line each, at most three, and only what stays true after this ticket; empty when there is nothing. cw adds them to the section "Notes kept by cw" of the project's `CLAUDE.md`, which every later session reads. Do not edit that section yourself.
 - `commit_message`: one conventional-commit line (`feat: ...`, `fix: ...`, `refactor: ...`, `chore: ...`).
 - `reason`: why you escalated or are blocked; empty otherwise.

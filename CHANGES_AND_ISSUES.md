@@ -4,6 +4,50 @@ A running log of what went wrong in real use, why, and what was changed. Newest 
 
 ---
 
+## 2026-11-13 (evening) · Checking the scaling changes, and the project's CLAUDE.md as memory
+
+**Why:** a review of the "Architecture scaling" changes below. Some of them did not do what that entry says, and you decided that cross-ticket memory should be the project's own `CLAUDE.md`, not a knowledge graph.
+
+### Corrections to the entry below
+
+- Its "63 tests pass; ruff is clean" was not true: `test_project_map_command` failed (its config used `extra_allowed_shell_prefixes` and had no `profile`), and ruff reported an unsorted import in `cli.py`.
+- `codebase_graph.html` does not exist in the repository.
+- FRIDAY had not been compiled; it builds (`swift build`, checked this time).
+
+### Bugs found and fixed
+
+| # | Symptom | Root cause | Fix |
+|---|---|---|---|
+| 1 | A worker session never started fresh, however big it grew | the 45k ceiling compared `input_tokens`, which with prompt caching is only the uncached part; most of a session is `cache_read_tokens` | it compares the average turn, cached and uncached together (`RunUsage.context_per_turn`) |
+| 2 | A worker could report `done`, change nothing, and pass | when git showed no change, cw fell back to the worker's own `files` | `files` is always git's list; an empty `done` adds a `No changes:` warning |
+| 3 | A later task lost what an earlier task left for it | the compaction dropped the handoff of every task but the last finished one | it drops the older summaries instead; files and handoffs stay |
+| 4 | Only the last scope problem was kept; a project in a subfolder of a repository flagged every file | one shared warning slot; git paths were relative to the repository root | one `Scope: S<n>:` warning per task; `git diff --relative` |
+| 5 | In a large repository the repo map lost whole folders and was slow | it cut at 250 lines in alphabetical order, walked through `node_modules` and `.venv`, and ignored `.gitignore` | built from `git ls-files`; when the full outline is too long it falls back to one line per file, then per folder |
+| 6 | A broken task became the base of the next one | the checks ran only after the last task | they run after every task, with the same one fix round |
+
+### Research: knowledge graph or CLAUDE.md
+
+- **A knowledge graph (for example graphify) was rejected.** It is useful to look at, but an agent would pay tokens to walk it, and it saves nothing over a short text map plus reading the right files.
+- **Checked:** with cw's isolation flags (`--strict-mcp-config --setting-sources project,local`), both plain and as a `--agent`, Claude Code still loads the `CLAUDE.md` in the project folder (Claude Code 2.1.311, a Haiku run answered with a codeword that only that file contained). So that file reaches every agent for free, and it is cached.
+- **Decided:** the project's own `CLAUDE.md` is the memory across tickets. It is committed and reviewed like code, and teammates' interactive sessions read it too. The repo map stays as well: it is the planner's index of *what exists*, built without an LLM; `CLAUDE.md` holds *how and why*.
+
+### Agents must keep the notes up to date
+
+- **Per ticket (already the case):** every agent answers through a required structured result, and cw writes it into `~/.cw/tickets/<project>/<id>.json` and `<id>.md` after every run. Agents do not write these files, so none can forget or corrupt them.
+- **Per project (new):** every worker answer must have `project_notes` (an answer without it is rejected): lasting facts such as a command, where a kind of code lives, a decision. cw adds new ones, without duplicates, to `## Notes kept by cw` in the project's `CLAUDE.md` (`project_memory.py`). The change is in the ticket's diff, so it is reviewed and committed once. Past 40 notes the ticket warns you to prune the section.
+- The rule "nothing is written into a project's repository" now has that one exception (`CLAUDE.md` in this repository).
+
+### Verified
+
+72 backend tests pass, including new ones for every fix above and for `project_memory.py`; ruff check and format are clean; FRIDAY builds.
+
+### Not verified yet
+
+- Any real agent run with these changes, and whether workers write useful `project_notes` or noise.
+- Whether 45k tokens per turn is the right ceiling; measure it with `cw show <id> --json`.
+
+---
+
 ## 2026-11-13 (later) · Architecture scaling: worker verification, context packs, repo maps vs. graphs, token hygiene
 
 **Why:** analyzing and solving five core failure modes regarding worker reliability, redundant codebase exploration, project knowledge representations across tickets, and prompt bloat.

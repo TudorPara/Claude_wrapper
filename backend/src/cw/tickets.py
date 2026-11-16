@@ -110,13 +110,18 @@ def list_tickets() -> list[TicketSummary]:
     return sorted(summaries, key=lambda summary: summary.updated_at, reverse=True)
 
 
-def work_record(entry: WorkEntry, include_handoff: bool = True) -> list[str]:
-    """Return what a worker left behind: how it solved its job, the files it touched, what the next one must know."""
+def work_record(entry: WorkEntry, brief: bool = False) -> list[str]:
+    """Return what a worker left behind: how it solved its job, the files it touched, what the next one must know.
+
+    The brief form drops the summary but keeps the files and the handoff, which later tasks build on.
+    """
     label = "Solved" if entry.status == WorkerStatus.DONE else str(entry.status)
-    lines = [f"- {label} by {entry.worker or 'a worker'}: {entry.summary.strip().replace(chr(10), chr(10) + '  ')}"]
+    head = f"- {label} by {entry.worker or 'a worker'}"
+    summary = entry.summary.strip().replace(chr(10), chr(10) + "  ")
+    lines = [head if brief or not summary else f"{head}: {summary}"]
     if entry.files:
         lines.append(f"- Files: {', '.join(entry.files)}")
-    if include_handoff and entry.handoff.strip():
+    if entry.handoff.strip():
         lines.append(f"- For the next worker: {entry.handoff.strip().replace(chr(10), chr(10) + '  ')}")
     return lines
 
@@ -132,8 +137,7 @@ def _tasks(ticket: Ticket, full: bool) -> list[str]:
             lines += ["", task.instructions, ""]
         records = [entry for entry in ticket.work_log if entry.subtask == task.id]
         if records:
-            include_handoff = full or (task.id == last_done_id)
-            lines += work_record(records[-1], include_handoff=include_handoff)
+            lines += work_record(records[-1], brief=not full and task.id != last_done_id)
     return lines
 
 

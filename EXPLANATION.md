@@ -86,9 +86,10 @@ you: prompt (terminal, FRIDAY chat or voice)        cw new <name> "<idea>" also 
                                                                       │
                                        S1 (W1) ─► S2 (W1, same session) ─► S3 (W2, new session) ─► S4 (W1) …
                                        a worker's question ─► planner answers ─► or you do
+                                       after every task: checks ─ broke? ─► one fix round by that worker
  │
  ▼
-checks (only those that passed on the base) ─ broke? ─► one fix round by the last worker, then report
+checks (only those that passed on the base; after each task, or once after a direct pass) ─ broke? ─► one fix round, then report
  │
  ▼  READY: changes are uncommitted in your checkout · reply to adjust · cw review · or Park
 you: cw pr
@@ -148,6 +149,16 @@ The `.md` holds, in this order: the request (all your prompts), questions and an
 - **The reviewer** gets the request, the plan, the workers' notes (marked as claims to verify), how the checks ended and the diff.
 
 `backend/src/cw/prompts.py` is the one place that builds these prompts.
+
+### What cw checks instead of trusting, and what it remembers
+
+- **git decides what a worker changed.** cw snapshots the tree before and after every worker run; the ticket's `Files:` line is git's list, not the worker's. A worker that says `done` but changed nothing gets a `No changes:` warning, and a task that changed files outside its planned list gets a `Scope: S<n>:` warning (one per task).
+- **The checks run after every task**, so a broken step is fixed before the next task builds on it.
+- **Worker sessions have a size limit.** When a run's average turn passes 45k tokens (cached and uncached together), that worker starts a fresh session next time, seeded from the ticket.
+- **Older tasks are shortened in a worker's view**: their summary is dropped, but their files and handoff stay, because later tasks build on them. The ticket's `.md` keeps everything.
+- **The planner hands over what it read**: a `context_pack` of 5–15 `path:lines` with the reason, shown to every new worker session so it starts reading in the right place.
+- **The planner gets a repo map**: `~/.cw/projects/<project>/repo_map.txt`, made without an LLM from `git ls-files` (so `.gitignore` is respected), at most 250 lines. When the full outline is too long it falls back to one line per file, then one line per folder, so no folder is dropped. It is refreshed at every ticket start and by `cw project map <name>`.
+- **The project's `CLAUDE.md` is its memory across tickets.** Claude Code loads it into every session in the project, cw's agents included (checked on 2026-11-13 with cw's own isolation flags). Every worker must return `project_notes` (an answer without the field is rejected): lasting facts such as a command, where a kind of code lives, or a decision. cw adds new ones, without duplicates, to the section `## Notes kept by cw` of that file. The change is part of the ticket's diff, so the reviewer sees it and it is committed with the code; past 40 notes the ticket warns you to prune the section.
 
 ---
 

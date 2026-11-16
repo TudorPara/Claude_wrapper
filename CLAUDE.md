@@ -6,7 +6,7 @@ A workflow around Claude Code for a small team: a shared **toolkit** of agents, 
 
 | Path | What |
 |---|---|
-| `backend/src/cw/` | `cli.py` commands · `pipeline.py` the ticket flow · `prompts.py` what each agent is told · `claude_runner.py` one `claude -p` run · `process.py` child processes with a time limit · `tickets.py` ticket files · `git.py` · `onboarding.py` projects · `config.py` · `toolkit.py` reads the toolkit |
+| `backend/src/cw/` | `cli.py` commands · `pipeline.py` the ticket flow · `prompts.py` what each agent is told · `claude_runner.py` one `claude -p` run · `process.py` child processes with a time limit · `tickets.py` ticket files · `project_memory.py` notes in a project's `CLAUDE.md` · `repo_map.py` the planner's map of a repository · `git.py` · `onboarding.py` projects · `config.py` · `toolkit.py` reads the toolkit |
 | `backend/tests/` | `conftest.py` has `FakeAgents`, which stands in for `claude -p` |
 | `toolkit/plugins/core/` | agents `planner`, `worker`, `reviewer`, `onboarder`; skills; `scripts/guard.py` |
 | `toolkit/plugins/python/` | skill `python-rules` (core `SKILL.md` + `topics/`), hooks `rules_on_touch.py`, `ruff_on_edit.py` |
@@ -25,7 +25,7 @@ uv tool install --force ./backend   # after changing cw, so the `cw` on your PAT
 
 - Agents never commit, push, merge or switch branches. cw does it, once, at `cw pr`. The guard hook and the worker's Bash allow-list enforce this.
 - Agents communicate only through the ticket. `prompts.py` gives an agent the part of the ticket it needs; its structured answer is written back by `pipeline.py`. A resumed worker gets only what is new.
-- Nothing is written into a project's repository except the agent's code changes. Tickets live in `~/.cw/tickets/<project>/` as `<id>.json` (state) and `<id>.md` (the readable twin).
+- Nothing is written into a project's repository except the agent's code changes and the "Notes kept by cw" section of its `CLAUDE.md` (`project_memory.py`, from the workers' required `project_notes`). Both are in the ticket's diff, reviewed and committed once. Tickets live in `~/.cw/tickets/<project>/` as `<id>.json` (state) and `<id>.md` (the readable twin).
 - Workers take turns in one checkout. No parallel edits, no worktrees.
 - Every loop has a cap in `Limits` (`config.py`). A new loop gets a cap.
 - Rules reach agents three ways: pinned skills (`pin: true`, keep them short), topic files shown by `rules_on_touch.py`, and hooks. Do not paste long rule files into prompts.

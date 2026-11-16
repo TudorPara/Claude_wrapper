@@ -65,7 +65,7 @@ def test_run_agent_passes_the_limits_and_returns_the_structured_result(
     monkeypatch.setenv("BITBUCKET__API_TOKEN", "secret")
     repository = make_repository(workspace, with_remote=False)
     answer = {"status": "done", "summary": "ok", "commit_message": "feat: x", "reason": ""}
-    answer |= {"files": ["a.py"], "handoff": "", "questions": []}
+    answer |= {"files": ["a.py"], "handoff": "", "questions": [], "project_notes": []}
     result = {
         "type": "result",
         "is_error": False,

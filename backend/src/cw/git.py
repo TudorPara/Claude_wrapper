@@ -123,8 +123,8 @@ def diff_stat(cwd: Path, old: str, new: str) -> str:
 
 
 def changed_files(cwd: Path, old: str, new: str) -> list[str]:
-    """Return the paths that differ between two commits or trees."""
-    return git(cwd, "diff", "--name-only", old, new).splitlines()
+    """Return the paths under this folder that differ between two commits or trees, relative to it."""
+    return git(cwd, "diff", "--name-only", "--relative", old, new).splitlines()
 
 
 def merge(cwd: Path, ref: str) -> bool:

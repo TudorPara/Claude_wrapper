@@ -37,7 +37,14 @@ def usage(role: AgentRole, session: str = "s") -> RunUsage:
 
 
 def answer(status: WorkerStatus, summary: str = "", **fields) -> WorkerResult:
-    result = {"files": [], "handoff": "", "questions": [], "commit_message": "feat: work", "reason": ""} | fields
+    result = {
+        "files": [],
+        "handoff": "",
+        "questions": [],
+        "project_notes": [],
+        "commit_message": "feat: work",
+        "reason": "",
+    } | fields
     return WorkerResult(status=status, summary=summary, **result)
 
 

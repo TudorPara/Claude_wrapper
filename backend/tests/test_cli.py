@@ -22,7 +22,7 @@ elif agent == "worker":
     step = len(list(pathlib.Path(".").glob("step_*.txt"))) + 1
     pathlib.Path(f"step_{step}.txt").write_text("done")
     answer = {"status": "done", "summary": f"step {step}", "commit_message": "feat: build it", "reason": ""}
-    answer |= {"files": [f"step_{step}.txt"], "handoff": "", "questions": []}
+    answer |= {"files": [f"step_{step}.txt"], "handoff": "", "questions": [], "project_notes": []}
 else:
     answer = {"verdict": "approve", "summary": "fine", "comments": []}
 tool_call = {"type": "tool_use", "name": "Read", "input": {"file_path": "README.md"}}
@@ -65,28 +65,8 @@ def test_a_project_goes_from_an_idea_to_a_merged_commit_through_the_command_line
     )
 
 
-def test_project_map_command(workspace: Path) -> None:
-    config_file = Path(os.environ["CW_HOME"]) / "config.json"
-    config = json.loads(config_file.read_text())
-    project_dir = workspace / "demo"
-    project_dir.mkdir()
-    (project_dir / "app.py").write_text("class DemoService:\n    pass\n")
-    config["projects"] = [
-        {
-            "name": "demo",
-            "path": str(project_dir),
-            "base_branch": "main",
-            "remote": "",
-            "stack": "python",
-            "git_host": None,
-            "commands": {"lint": "true", "test": "true"},
-            "protected_paths": [],
-            "extra_allowed_shell_prefixes": [],
-            "env": {},
-        }
-    ]
-    config_file.write_text(json.dumps(config))
-
+def test_project_map_command(local_repository: Path) -> None:
+    (local_repository / "app.py").write_text("class DemoService:\n    pass\n")
     command = [sys.executable, "-c", "from cw.cli import main; main()", "project", "map", "demo", "--json"]
     result = subprocess.run(command, capture_output=True, text=True, check=True)
     parsed = json.loads(result.stdout)

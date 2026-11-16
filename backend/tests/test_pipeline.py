@@ -343,3 +343,74 @@ def test_files_the_checks_leave_behind_are_reported_on_the_ticket(workspace: Pat
     save_settings(settings)
     ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
     assert any("left files behind (report.xml)" in warning for warning in ticket.warnings)
+
+
+def test_git_decides_which_files_a_worker_changed_and_an_empty_done_is_flagged(
+    local_repository: Path, agents: FakeAgents
+) -> None:
+    agents.worker = lambda prompt, cwd, call: answer(WorkerStatus.DONE, "claims work", files=["made_up.py"])
+    ticket = pipeline.start_ticket("demo", "do nothing", plan_first=False)
+    assert ticket.work_log[0].files == []
+    assert "No changes: follow-up: worker W1 reported done but changed no files." in ticket.warnings
+
+
+def test_a_task_that_changes_files_outside_its_list_is_flagged(local_repository: Path, agents: FakeAgents) -> None:
+    ticket = pipeline.start_ticket("demo", "two steps", plan_first=True)
+    ticket.subtasks[0].files = ["planned.txt"]
+    save_ticket(ticket)
+    done = pipeline.approve(ticket.id)
+    assert "Scope: S1: worker W1 changed files outside its task: work_1.txt" in done.warnings
+    assert not any(warning.startswith("Scope: S2") for warning in done.warnings)
+
+
+def test_a_session_past_the_token_ceiling_starts_fresh(
+    local_repository: Path, agents: FakeAgents, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pipeline, "WORKER_SESSION_TOKEN_CEILING", 0)
+    ticket = pipeline.start_ticket("demo", "two steps", plan_first=True)
+    pipeline.approve(ticket.id)
+    assert [session for role, session in agents.resumed if role == WORKER] == [None, None]
+    assert "## Request" in agents.prompts_for(WORKER)[1]
+
+
+def test_the_checks_run_after_each_task_so_the_next_task_starts_from_working_code(
+    local_repository: Path, agents: FakeAgents
+) -> None:
+    def breaks_then_fixes(prompt: str, cwd: Path, call: int) -> WorkerResult:
+        if call == 1:
+            (cwd / "BROKEN").write_text("x")
+        if prompt.startswith("## Fix the failing checks"):
+            (cwd / "BROKEN").unlink()
+        return agents.default_worker(prompt, cwd, call)
+
+    agents.worker = breaks_then_fixes
+    ticket = pipeline.start_ticket("demo", "two steps", plan_first=True)
+    done = pipeline.approve(ticket.id)
+    first, fix, second = agents.prompts_for(WORKER)
+    assert "## Your task: S1" in first and fix.startswith("## Fix the failing checks") and "S2" in second
+    assert done.failing_checks == [] and done.status == TicketStatus.READY
+
+
+def test_older_tasks_keep_their_handoff_but_lose_their_summary_in_the_workers_view(
+    local_repository: Path, agents: FakeAgents
+) -> None:
+    agents.task_workers = ["W1", "W2", "W3"]
+    ticket = pipeline.start_ticket("demo", "three steps", plan_first=True)
+    pipeline.approve(ticket.id)
+    third = agents.prompts_for(WORKER)[2]
+    assert "- Solved by W1\n- Files: work_1.txt\n- For the next worker: work_1.txt holds the result" in third
+    assert "- Solved by W2: pass 2" in third
+
+
+def test_a_workers_project_notes_land_in_the_projects_claude_md_and_in_the_diff(
+    local_repository: Path, agents: FakeAgents
+) -> None:
+    def notes(prompt: str, cwd: Path, call: int) -> WorkerResult:
+        (cwd / "app.py").write_text("x = 1\n")
+        return answer(WorkerStatus.DONE, "added app", project_notes=["The entry point is app.py."])
+
+    agents.worker = notes
+    ticket = pipeline.start_ticket("demo", "add app", plan_first=False)
+    assert "- The entry point is app.py." in (local_repository / "CLAUDE.md").read_text()
+    assert ticket.work_log[0].files == ["app.py"]
+    assert "CLAUDE.md" in git(local_repository, "status", "--porcelain")
