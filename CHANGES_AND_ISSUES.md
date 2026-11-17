@@ -18,6 +18,12 @@ A running log of what went wrong in real use, why, and what was changed. Newest 
 
 Planner $1.34 (2 runs), reviewer $2.05 (4 runs), worker $4.67 (26 runs, 10.5M cached tokens read): about $8.06 for the whole service.
 
+### Running the app afterwards
+
+Starting the finished app by hand took a long detour with another assistant, for two reasons that cw now prevents for new projects:
+- **Port 5432 was taken.** The hand-started test container (`expense-postgres`) held it, so `localhost:5432` reached that server, where the user `expense_tracker` does not exist. The error was "password authentication failed", which first sent the debugging after passwords and volumes. The fix was host port 5433 in `dev/docker-compose.yml`. The planner now tells the skeleton task to publish each service on a port picked for the project, not the default.
+- **README commands with a comment after them broke in zsh.** `make run-api     # uvicorn ...` passed `#`, `uvicorn` and `--reload` to `make`, because zsh does not treat `#` as a comment when pasted. The planner now asks for one command per line with no comment, and cw's own README lists its commands in tables instead of a commented code block.
+
 ### Left open
 
 - The squash commit message is still the first task's ("feat: add project files, settings and pagination models").

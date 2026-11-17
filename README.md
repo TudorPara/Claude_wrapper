@@ -75,44 +75,54 @@ Every view has a `--json` form; FRIDAY uses exactly those. While a command runs,
 
 ## All commands
 
-`<ticket>` is a ticket id, `<project>` a project name. `cw <command> --help` shows the same.
+`<ticket>` is a ticket id, `<project>` a project name, and `[...]` is optional. `cw <command> --help` shows the same.
 
-```bash
-# Setup
-cw init --toolkit <path> --github-repo <owner/name> [--force]   # write a starter config
-cw config [show] [--json]                                       # print the config
-cw config set < config.json                                     # replace the config with JSON from stdin
-cw doctor                                                       # check binaries, tokens, toolkit and plugins
-cw toolkit [--json]                                             # agents, skills and models
+**Setup**
 
-# Projects
-cw project add <path> [--name <name>] [--host github|bitbucket] [--onboard]   # register a repository
-cw project onboard <project>                                    # map it with the onboarder agent
-cw project remove <project>                                     # unregister it
-cw project list                                                 # each project's codebase state, as JSON
-cw project wire <project>                                       # write the toolkit into the repo's .claude/settings.json
-cw project map <project> [--json]                               # generate or print the repo map
-cw new <name> "<idea>" [--path <path>] [--stack <stack>] [--github private|public]   # create a project from an idea
+| Command | What it does |
+|---|---|
+| `cw init --toolkit <path> --github-repo <owner/name> [--force]` | Write a starter config |
+| `cw config [show] [--json]` | Print the config |
+| `cw config set < config.json` | Replace the config with JSON from stdin |
+| `cw doctor` | Check binaries, tokens, toolkit and plugins |
+| `cw toolkit [--json]` | Agents, skills and models |
 
-# Tickets, in the order you use them
-cw run <project> "<request>" [--plan] [--base <branch>]         # start a ticket
-cw run <ticket> "<follow-up>"                                   # answer a question, give plan feedback, or follow up
-cw approve <ticket>                                             # approve the plan and run the workers
-cw split <ticket>                                               # one ticket per change the planner split out
-cw resume <ticket>                                              # re-run the step that paused, was blocked or stopped
-cw review <ticket>                                              # checks and reviewer; nothing is committed
-cw pr <ticket>                                                  # review, commit once, push, open the pull request
-cw ci <ticket>                                                  # the pull request's CI status
-cw fix <ticket>                                                 # the worker addresses the PR's comments until none are left
-cw merge <ticket>                                               # squash-merge once CI passed, close the ticket
-cw done <ticket> [--abandon]                                    # close the ticket and switch back
-cw park <ticket>                                                # save the work as a WIP commit and switch back
+**Projects**
 
-# Looking at things
-cw status [--project <project>] [--include-archived] [--json]   # list tickets
-cw show <ticket> [--json]                                       # one ticket
-cw stats [--json]                                               # token usage per project and role
-```
+| Command | What it does |
+|---|---|
+| `cw project add <path> [--name <name>] [--host github\|bitbucket] [--onboard]` | Register a repository |
+| `cw project onboard <project>` | Map it with the onboarder agent |
+| `cw project remove <project>` | Unregister it |
+| `cw project list` | Each project's codebase state, as JSON |
+| `cw project wire <project>` | Write the toolkit into the repo's .claude/settings.json |
+| `cw project map <project> [--json]` | Generate or print the repo map |
+| `cw new <name> "<idea>" [--path <path>] [--stack <stack>] [--github private\|public]` | Create a project from an idea |
+
+**Tickets, in the order you use them**
+
+| Command | What it does |
+|---|---|
+| `cw run <project> "<request>" [--plan] [--base <branch>]` | Start a ticket |
+| `cw run <ticket> "<follow-up>"` | Answer a question, give plan feedback, or follow up |
+| `cw approve <ticket>` | Approve the plan and run the workers |
+| `cw split <ticket>` | One ticket per change the planner split out |
+| `cw resume <ticket>` | Re-run the step that paused, was blocked or stopped |
+| `cw review <ticket>` | Checks and reviewer; nothing is committed |
+| `cw pr <ticket>` | Review, commit once, push, open the pull request |
+| `cw ci <ticket>` | The pull request's CI status |
+| `cw fix <ticket>` | The worker addresses the PR's comments until none are left |
+| `cw merge <ticket>` | Squash-merge once CI passed, close the ticket |
+| `cw done <ticket> [--abandon]` | Close the ticket and switch back |
+| `cw park <ticket>` | Save the work as a WIP commit and switch back |
+
+**Looking at things**
+
+| Command | What it does |
+|---|---|
+| `cw status [--project <project>] [--include-archived] [--json]` | List tickets |
+| `cw show <ticket> [--json]` | One ticket |
+| `cw stats [--json]` | Token usage per project and role |
 
 ## Develop
 

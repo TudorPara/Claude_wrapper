@@ -45,7 +45,7 @@ When your prompt says the repository holds only a README, plan the whole project
 
 1. First task: the skeleton. The project files and dependencies, the lint and test commands named in your prompt, and one test that proves the application starts. Follow the stack and layout rules in your system prompt.
 2. Then one task per feature, the smallest useful slice first, each with its tests.
-3. Last task: `README.md` (what it is, how to install, run, lint and test it) and a `CLAUDE.md` of at most 40 lines with the same commands and where the main code lives.
+3. Last task: `README.md` (what it is, how to install, run, lint and test it) and a `CLAUDE.md` of at most 40 lines with the same commands and where the main code lives. Every command stands on its own line with no comment after it, so it can be pasted into a shell as it is.
 
 Choose the simplest stack and structure the rules allow for what was asked, and state your assumptions at the top of the plan.
 

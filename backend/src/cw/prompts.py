@@ -218,7 +218,9 @@ def planner_prompt(project: Project, ticket: Ticket, feedback: str | None) -> st
     services = (
         f"\n\nThe app runs locally from the first task. When it needs a database or another service, the skeleton "
         f"task adds `{project.compose_file}` with a healthcheck for every service: cw starts it before every worker "
-        "run and every check, because workers cannot run docker. The skeleton task also writes `.env` with working "
+        "run and every check, because workers cannot run docker. Publish each service on a host port picked for "
+        "this project, not the service's default (5432, 6379, ...), which another project's container may already "
+        "hold. The skeleton task also writes `.env` with working "
         "local development values that match it (random values for local secrets, never a real one; `.env` is "
         "gitignored) and keeps `.env.example` in step with empty values. Tests use their own database, never the "
         "development one."
