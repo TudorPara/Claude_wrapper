@@ -482,12 +482,36 @@ def test_a_task_whose_checks_still_fail_after_the_fix_round_stops_the_ticket_and
         pipeline.approve(ticket.id)
     stopped = find_ticket(ticket.id)
     assert stopped.status == TicketStatus.BLOCKED and stopped.tasks_done == []
-    assert len(agents.prompts_for(WORKER)) == 2
+    task, fix, backoff, backoff_fix = agents.prompts_for(WORKER)
+    assert "## Request" in backoff and "## A previous attempt failed" in backoff
+    assert backoff_fix.startswith("## Fix the failing checks")
 
     (local_repository / "BROKEN").unlink()
     agents.worker = agents.default_worker
     resumed = pipeline.resume(ticket.id)
     assert resumed.tasks_done == ["S1", "S2"] and resumed.status == TicketStatus.READY
+
+
+def test_a_task_still_failing_after_its_fix_round_gets_a_fresh_session_that_starts_from_the_reflection(
+    local_repository: Path, agents: FakeAgents
+) -> None:
+    def fixes_only_after_backing_off(prompt: str, cwd: Path, call: int) -> WorkerResult:
+        if call == 1:
+            (cwd / "BROKEN").write_text("x")
+        if prompt.startswith("## Fix the failing checks"):
+            return answer(WorkerStatus.DONE, "tried", reflection="BROKEN comes back; delete it instead")
+        if "## A previous attempt failed" in prompt:
+            (cwd / "BROKEN").unlink()
+        return agents.default_worker(prompt, cwd, call)
+
+    agents.worker = fixes_only_after_backing_off
+    ticket = pipeline.start_ticket("demo", "two steps", plan_first=True)
+    done = pipeline.approve(ticket.id)
+    _, _, backoff, _ = agents.prompts_for(WORKER)
+    assert "Lesson from the previous attempt:\nBROKEN comes back; delete it instead" in backoff
+    sessions = [session for role, session in agents.resumed if role == WORKER]
+    assert sessions[1] is not None and sessions[2] is None and sessions[3] is not None
+    assert done.tasks_done == ["S1", "S2"] and done.status == TicketStatus.READY
 
 
 def test_older_tasks_keep_their_handoff_but_lose_their_summary_in_the_workers_view(

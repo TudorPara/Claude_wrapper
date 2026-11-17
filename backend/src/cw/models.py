@@ -138,6 +138,11 @@ class WorkerResult(BaseModel):
     )
     commit_message: str
     reason: str
+    reflection: str = Field(
+        default="",
+        description="Only when fixing failing checks: what you tried, why it may still fail, what to try next. "
+        "At most three lines. Otherwise empty.",
+    )
 
 
 class ReviewerResult(BaseModel):
@@ -200,6 +205,7 @@ class WorkEntry(BaseModel):
     files: list[str] = []
     handoff: str = ""
     project_notes: list[str] = []
+    reflection: str = ""
 
 
 class ReviewEntry(BaseModel):

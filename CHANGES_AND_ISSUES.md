@@ -4,6 +4,18 @@ A running log of what went wrong in real use, why, and what was changed. Newest 
 
 ---
 
+## 2026-11-17 · Back-off to a fresh session (branch `feature/react`)
+
+**Why:** from the ReAct paper (arXiv:2210.03629): past a few steps, more ReAct steps stopped helping, and switching method beat pushing on. In cw, a task whose checks still failed after its fix round stopped, and `cw resume` continued the same worker session, carrying every failed attempt and every file it had read.
+
+| # | Change | Where |
+|---|---|---|
+| 1 | The worker's fix answer has a `reflection`: what it tried, why it may still fail, what to try next | `models.py` |
+| 2 | A task still failing after its fix round gets one fresh session of its worker, started from the reflection and the failing output (Reflexion; observation dropping from *The Complexity Trap*) | `pipeline._back_off`, `prompts.backoff_instruction` |
+| 3 | Capped by `limits.max_backoff_rounds` (default 1); the ticket stops as before when the back-off fails too | `config.py`, `Models.swift` |
+
+Not measured on a real project yet: compare `cw stats` and the outcome on a task that fails its checks, against main.
+
 ## 2026-11-17 · Expense tracker from nothing (17 tasks, PostgreSQL); stop on broken checks, `cw fix` loop, containers
 
 **Why:** the biggest ticket so far: a FastAPI expense tracker with cookie auth, seven migrations, CSV import, budgets, reports and a scheduled worker, built in 17 tasks by 3 workers, 65 tests, PR #1. It exposed three gaps in cw.
