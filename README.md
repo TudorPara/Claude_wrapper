@@ -73,6 +73,104 @@ First time? Follow [FIRST_RUN.md](FIRST_RUN.md). How it works and why: [EXPLANAT
 
 Every view has a `--json` form; FRIDAY uses exactly those. While a command runs, cw prints each tool call the agent makes, so you can follow it live.
 
+## Examples
+
+Each command goes on its own line; paste them one at a time. `cw` prints the ticket id when a step ends: use it in place of `<ticket>`.
+
+### Build a new project from an idea
+
+Create the repository (here a private GitHub repo in `~/Projects/habits`) and let the planner plan it:
+
+```bash
+cw new habits "A habit tracker REST API with FastAPI and PostgreSQL: habits, daily check-ins and streaks" --path ~/Projects --github private
+```
+
+Read the plan, send feedback if you want changes, then approve it:
+
+```bash
+cw show <ticket>
+```
+
+```bash
+cw run <ticket> "split the first task in two"
+```
+
+```bash
+cw approve <ticket>
+```
+
+The workers build it task by task, and cw runs lint and tests after each one. When the project needs a database, the first task writes `dev/docker-compose.yml` and a local `.env`, and cw starts the containers itself. Then review, open the pull request, work off its comments and merge:
+
+```bash
+cw review <ticket>
+```
+
+```bash
+cw pr <ticket>
+```
+
+```bash
+cw fix <ticket>
+```
+
+```bash
+cw merge <ticket>
+```
+
+### Change or add a feature in a repository you already have
+
+Register the repository once. `--onboard` also has the onboarder agent map it (stack, commands, how it differs from the team rules), which costs one agent run:
+
+```bash
+cw project add ~/code/my-service --onboard
+```
+
+A small change goes straight to a worker:
+
+```bash
+cw run my-service "make the save button blue"
+```
+
+A bigger one gets a plan first, which you approve:
+
+```bash
+cw run my-service --plan "add CSV export of the monthly report"
+```
+
+```bash
+cw approve <ticket>
+```
+
+From there it is the same as above: `cw review`, `cw pr`, `cw fix`, `cw merge`. If a step stops (a failing check, an error, the usage limit), fix the cause and continue with `cw resume <ticket>`.
+
+### Watch what is happening
+
+The command you ran prints every tool call the agent makes. In other terminal tabs:
+
+Ticket status, refreshed every 5 seconds:
+
+```bash
+while true; do clear; cw status --project my-service; sleep 5; done
+```
+
+The files the workers are changing:
+
+```bash
+while true; do clear; git -C ~/code/my-service status -s; git -C ~/code/my-service diff --stat; sleep 5; done
+```
+
+The ticket as it fills in (plan, each task's result, reviews):
+
+```bash
+tail -f ~/.cw/tickets/my-service/<ticket>.md
+```
+
+Tokens and cost per project and role:
+
+```bash
+cw stats
+```
+
 ## All commands
 
 `<ticket>` is a ticket id, `<project>` a project name, and `[...]` is optional. `cw <command> --help` shows the same.
