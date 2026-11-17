@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -327,17 +328,72 @@ def test_conflicts_with_the_base_are_resolved_and_later_reviews_skip_the_base_ch
 
 
 def test_a_new_project_is_created_planned_and_holds_every_check(workspace: Path, agents: FakeAgents) -> None:
+    settings = get_settings()
+    settings.default_protected_paths = [".env", "**/.env", "**/*.key"]
+    write_settings(settings)
     project = onboarding.create_project("reminders", "Remind me when the car insurance expires", workspace, None, None)
     assert (project.stack, project.base_branch) == ("python", "main")
+    assert project.compose_file == "dev/docker-compose.yml" and project.protected_paths == ["**/*.key"]
     assert (project.path / "README.md").read_text().startswith("# reminders")
     ticket = pipeline.start_ticket(project.name, "Remind me when the car insurance expires", True, new_project=True)
     assert ticket.status == TicketStatus.AWAITING_APPROVAL
     assert ticket.baseline == {"lint": True, "test": True}
     planner_prompt = agents.prompts_for(AgentRole.PLANNER)[0]
     assert "## New project" in planner_prompt and "`true` (test)" in planner_prompt
+    assert "adds `dev/docker-compose.yml` with a healthcheck" in planner_prompt and "writes `.env`" in planner_prompt
     assert "You have up to 4 workers" in planner_prompt
     pipeline.approve(ticket.id)
     assert "(new project: set it up and make it pass)" in agents.prompts_for(WORKER)[0]
+
+
+def _fake_docker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_code: int) -> Path:
+    calls = tmp_path / "docker-calls.txt"
+    binary = tmp_path / "bin" / "docker"
+    binary.parent.mkdir()
+    binary.write_text(f'#!/bin/sh\necho "$@" >> {calls}\necho "port is already allocated" >&2\nexit {exit_code}\n')
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binary.parent}:{os.environ['PATH']}")
+    return calls
+
+
+def _use_compose_file(repository: Path, compose_file: str, commit: bool) -> None:
+    settings = get_settings()
+    settings.project("demo").compose_file = compose_file
+    write_settings(settings)
+    if commit:
+        (repository / compose_file).parent.mkdir(parents=True, exist_ok=True)
+        (repository / compose_file).write_text("services: {}\n")
+        git(repository, "add", "-A")
+        git(repository, "commit", "-m", "add compose file")
+
+
+def test_cw_starts_the_projects_containers_before_the_worker_and_the_checks(
+    local_repository: Path, agents: FakeAgents, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _fake_docker(tmp_path, monkeypatch, exit_code=0)
+    _use_compose_file(local_repository, "dev/docker-compose.yml", commit=True)
+    pipeline.start_ticket("demo", "add a file", plan_first=False)
+    lines = calls.read_text().splitlines()
+    assert len(lines) == 2 and set(lines) == {"compose --file dev/docker-compose.yml up --detach --wait"}
+
+
+def test_no_container_is_started_until_the_compose_file_exists(
+    local_repository: Path, agents: FakeAgents, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _fake_docker(tmp_path, monkeypatch, exit_code=0)
+    _use_compose_file(local_repository, "dev/docker-compose.yml", commit=False)
+    pipeline.start_ticket("demo", "add a file", plan_first=False)
+    assert not calls.exists()
+
+
+def test_containers_that_do_not_start_stop_the_ticket_with_dockers_reason(
+    local_repository: Path, agents: FakeAgents, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_docker(tmp_path, monkeypatch, exit_code=1)
+    _use_compose_file(local_repository, "compose.yml", commit=True)
+    with pytest.raises(AppException, match="Could not start the containers in compose.yml"):
+        pipeline.start_ticket("demo", "add a file", plan_first=False)
+    assert agents.prompts_for(WORKER) == []
 
 
 def test_files_the_checks_leave_behind_are_reported_on_the_ticket(workspace: Path, agents: FakeAgents) -> None:
@@ -413,6 +469,27 @@ def test_the_checks_run_after_each_task_so_the_next_task_starts_from_working_cod
     assert done.failing_checks == [] and done.status == TicketStatus.READY
 
 
+def test_a_task_whose_checks_still_fail_after_the_fix_round_stops_the_ticket_and_resumes_there(
+    local_repository: Path, agents: FakeAgents
+) -> None:
+    def breaks_the_check(prompt: str, cwd: Path, call: int) -> WorkerResult:
+        (cwd / "BROKEN").write_text("x")
+        return agents.default_worker(prompt, cwd, call)
+
+    agents.worker = breaks_the_check
+    ticket = pipeline.start_ticket("demo", "two steps", plan_first=True)
+    with pytest.raises(AppException, match="S1: `test ! -f BROKEN` still fails after the fix round"):
+        pipeline.approve(ticket.id)
+    stopped = find_ticket(ticket.id)
+    assert stopped.status == TicketStatus.BLOCKED and stopped.tasks_done == []
+    assert len(agents.prompts_for(WORKER)) == 2
+
+    (local_repository / "BROKEN").unlink()
+    agents.worker = agents.default_worker
+    resumed = pipeline.resume(ticket.id)
+    assert resumed.tasks_done == ["S1", "S2"] and resumed.status == TicketStatus.READY
+
+
 def test_older_tasks_keep_their_handoff_but_lose_their_summary_in_the_workers_view(
     local_repository: Path, agents: FakeAgents
 ) -> None:
@@ -464,6 +541,56 @@ def test_fix_sends_the_open_pr_comments_to_the_worker_pushes_the_fix_and_resolve
     assert host.summaries[-1] == "**W1** · 1 comment(s)\n\npass 2"
     assert git(remote_repository, "rev-list", "--count", f"main..{ticket.branch}") == "2"
     assert git(workspace / "origin.git", "rev-parse", ticket.branch) == git(remote_repository, "rev-parse", "HEAD")
+
+
+def _pull_request_fix_prompts(agents: FakeAgents) -> list[str]:
+    return [prompt for prompt in agents.prompts_for(WORKER) if prompt.startswith("## Address these pull request")]
+
+
+def test_fix_keeps_going_while_the_new_review_leaves_comments_and_stops_when_none_are_left(
+    remote_repository: Path, agents: FakeAgents, host: FakeHost
+) -> None:
+    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
+    pipeline.open_pull_request(ticket.id)
+    reviews = len(agents.prompts_for(AgentRole.REVIEWER))
+    nit = ReviewComment(path="work_1.txt", line=1, severity=Severity.MINOR, body="rename it")
+
+    def one_more_finding(prompt: str) -> ReviewerResult:
+        first_fix_review = len(agents.prompts_for(AgentRole.REVIEWER)) == reviews + 1
+        return ReviewerResult(verdict=Verdict.APPROVE, summary="ok", comments=[nit] if first_fix_review else [])
+
+    agents.reviewer = one_more_finding
+    host.threads = [PullRequestThread(id="T1", path="work_1.txt", line=1, body="alice: be stricter")]
+    fixed = pipeline.fix_pull_request(ticket.id)
+    assert len(_pull_request_fix_prompts(agents)) == 2 and "rename it" in _pull_request_fix_prompts(agents)[1]
+    assert host.open_threads(1) == [] and host.resolved == ["T1", "R2"]
+    assert not any(warning.startswith("Pull request:") for warning in fixed.warnings)
+
+
+def test_fix_stops_at_its_round_cap_and_says_what_is_left(
+    remote_repository: Path, agents: FakeAgents, host: FakeHost
+) -> None:
+    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
+    pipeline.open_pull_request(ticket.id)
+    nit = ReviewComment(path="work_1.txt", line=1, severity=Severity.MINOR, body="again")
+    agents.reviewer = lambda prompt: ReviewerResult(verdict=Verdict.APPROVE, summary="ok", comments=[nit])
+    host.threads = [PullRequestThread(id="T1", path="work_1.txt", line=1, body="alice: be stricter")]
+    fixed = pipeline.fix_pull_request(ticket.id)
+    assert len(_pull_request_fix_prompts(agents)) == 3
+    assert f"Pull request: 1 comment(s) still open on {fixed.pr_url} after cw fix." in fixed.warnings
+
+
+def test_fix_stops_after_a_round_in_which_the_worker_changed_nothing(
+    remote_repository: Path, agents: FakeAgents, host: FakeHost
+) -> None:
+    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
+    pipeline.open_pull_request(ticket.id)
+    nit = ReviewComment(path="work_1.txt", line=1, severity=Severity.MINOR, body="again")
+    agents.reviewer = lambda prompt: ReviewerResult(verdict=Verdict.APPROVE, summary="ok", comments=[nit])
+    agents.worker = lambda prompt, cwd, call: answer(WorkerStatus.DONE, "already right")
+    host.threads = [PullRequestThread(id="T1", path="work_1.txt", line=1, body="alice: be stricter")]
+    pipeline.fix_pull_request(ticket.id)
+    assert len(_pull_request_fix_prompts(agents)) == 1 and "T1" in host.resolved
 
 
 def test_fix_without_open_comments_runs_no_agent(remote_repository: Path, agents: FakeAgents, host: FakeHost) -> None:

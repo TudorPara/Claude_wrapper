@@ -113,6 +113,9 @@ class FakeHost:
     def post_review(self, number: int, summary: str, comments: list) -> None:
         self.reviews += 1
         self.summaries.append(summary)
+        self.threads += [
+            PullRequestThread(id=f"R{len(self.threads) + 1}", path=c.path, line=c.line, body=c.body) for c in comments
+        ]
 
     def ci_passed(self, number: int, sha: str) -> bool:
         return self.ci

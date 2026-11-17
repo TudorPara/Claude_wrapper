@@ -81,6 +81,9 @@ class Limits(StrictModel):
     max_review_rounds: NonNegativeInt = Field(description="Fix rounds after a reviewer asks for changes.")
     max_fix_rounds: NonNegativeInt = Field(description="Fix rounds after lint or tests fail.")
     max_conflict_rounds: NonNegativeInt = Field(description="Attempts to resolve merge conflicts with the base branch.")
+    max_pull_request_fix_rounds: PositiveInt = Field(
+        default=3, description="Rounds `cw fix` runs while the pull request still has open comments."
+    )
     max_question_rounds: NonNegativeInt = Field(
         description="Times the planner may ask you, and times a worker may ask per instruction."
     )
@@ -126,6 +129,9 @@ class Project(StrictModel):
         description="Environment for commands and agents; {ticket} is replaced by the ticket id."
     )
     profile: Profile
+    compose_file: str = Field(
+        default="", description="Docker Compose file cw starts before every worker run and check; empty for none."
+    )
 
     def checks(self) -> list[tuple[str, str]]:
         """Return the configured checks as (name, command)."""

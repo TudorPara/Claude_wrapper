@@ -82,7 +82,8 @@ def test_run_agent_passes_the_limits_and_returns_the_structured_result(
     )
     command = commands[0]
     assert worker.summary == "ok" and (usage.session_id, usage.num_turns, usage.model) == ("abc", 4, "big")
-    assert command[command.index("--max-turns") + 1] == "40"
+    worker_turns = settings.project("demo").profile.limits.max_turns.worker
+    assert command[command.index("--max-turns") + 1] == str(worker_turns)
     assert command[command.index("--output-format") + 1] == "stream-json" and "--verbose" in command
 
 

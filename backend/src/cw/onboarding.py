@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_REMOTE = "origin"
 NEW_PROJECT_BRANCH = "main"
+NEW_PROJECT_COMPOSE_FILE = "dev/docker-compose.yml"
+ENV_FILE_PATTERNS = (".env", "**/.env", ".env*")
 FIRST_COMMIT_MESSAGE = "chore: start project"
 NEW_PROJECT_GITIGNORE = "\n".join(
     [
@@ -108,7 +110,11 @@ def add_project(
 
 
 def create_project(name: str, idea: str, parent: Path, stack: str | None, github: str | None) -> Project:
-    """Create the repository of a new project (a README and a .gitignore), optionally on GitHub, and register it."""
+    """Create the repository of a new project (a README and a .gitignore), optionally on GitHub, and register it.
+
+    The project's agents may write its `.env`, which holds only local development values and is gitignored, and cw
+    starts the containers its skeleton task puts in `dev/docker-compose.yml`, so the app runs from the first task.
+    """
     settings = get_settings()
     stack = stack or next(iter(settings.stacks), "")
     if settings.stack(stack) is None:
@@ -131,7 +137,13 @@ def create_project(name: str, idea: str, parent: Path, stack: str | None, github
         if created.returncode != 0:
             raise AppException(AppErrorCode.GIT_HOST_FAILED, created.stderr.strip())
     logger.info("Created %s.", path)
-    return add_project(path, name, GitHostProvider.GITHUB, onboard=False, stack=stack)
+    registered = add_project(path, name, GitHostProvider.GITHUB, onboard=False, stack=stack)
+    settings = get_settings()
+    project = settings.project(registered.name)
+    project.compose_file = NEW_PROJECT_COMPOSE_FILE
+    project.protected_paths = [pattern for pattern in project.protected_paths if pattern not in ENV_FILE_PATTERNS]
+    write_settings(settings)
+    return project
 
 
 def onboard_project(name: str) -> Project:

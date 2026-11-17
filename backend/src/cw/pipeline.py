@@ -64,6 +64,9 @@ ARTIFACTS_SHOWN = 5
 REVIEW_WARNING = "Review:"
 FETCH_WARNING = "Fetch:"
 LOCAL_WARNING = "Local:"
+PULL_REQUEST_WARNING = "Pull request:"
+DOCKER_COMPOSE = ("docker", "compose", "--file")
+COMPOSE_UP = ("up", "--detach", "--wait")
 USER = "user"
 PLANNER = "planner"
 WORKER_SESSION_TOKEN_CEILING = 45000
@@ -156,6 +159,26 @@ def _run_check(project: Project, ticket_id: str, command: str) -> tuple[bool, st
     return code == 0, f"{stdout}{stderr}"
 
 
+def _start_services(project: Project) -> None:
+    """Start the project's containers before a worker or the checks need them; a failure stops the ticket.
+
+    Workers may run only the lint and test commands, so cw starts the services itself. `up --wait` returns at once
+    when they already run, and waits for their healthchecks otherwise.
+    """
+    if not project.compose_file or not (project.path / project.compose_file).exists():
+        return
+    command = [*DOCKER_COMPOSE, project.compose_file, *COMPOSE_UP]
+    code, stdout, stderr = run_process(
+        command, project.path, {**os.environ, **project.env}, project.profile.limits.check_timeout_minutes
+    )
+    if code != 0:
+        output = f"{stdout}{stderr}"[-project.profile.limits.max_check_output_chars :]
+        logger.error("Could not start the containers in %s.", project.compose_file)
+        raise AppException(
+            AppErrorCode.COMMAND_FAILED, f"Could not start the containers in {project.compose_file}:\n{output}"
+        )
+
+
 def _record_baseline(project: Project, ticket: Ticket) -> None:
     """Run the checks once on the untouched base; only checks that pass here are enforced later.
 
@@ -181,6 +204,7 @@ def _record_baseline(project: Project, ticket: Ticket) -> None:
 
 def _failing_checks(project: Project, ticket: Ticket) -> list[tuple[str, str]]:
     """Run the checks that passed on the base; return (command, output) for each one that fails now."""
+    _start_services(project)
     failures = []
     for name, command in project.checks():
         if not ticket.baseline.get(name, False):
@@ -251,6 +275,7 @@ def _worker(
     settings: Settings, project: Project, ticket: Ticket, worker: str, instruction: str, task: str | None
 ) -> WorkerResult:
     """Give a worker its next instruction and write what it did into the ticket."""
+    _start_services(project)
     tree_before = git.snapshot(project.path)
     worker_result, session = _resume_or_start_agent(
         settings,
@@ -490,9 +515,16 @@ def _task_passes(settings: Settings, project: Project, ticket: Ticket) -> bool:
             return False
         if worker_result.status != WorkerStatus.DONE:
             raise AppException(AppErrorCode.AGENT_FAILED, f"Task {task.id} stopped: {worker_result.reason}")
-        ticket.tasks_done.append(task.id)
-        write_ticket(ticket)
         _checks_with_fixes(settings, project, ticket)
+        if ticket.failing_checks:
+            failing = ", ".join(f"`{command}`" for command in ticket.failing_checks)
+            raise AppException(
+                AppErrorCode.CHECKS_FAILED,
+                f"Task {task.id}: {failing} still fails after the fix round, so the next task would build on "
+                "untested code. The worker's summary in the ticket says why; fix the cause, then "
+                f"cw resume {ticket.id}.",
+            )
+        ticket.tasks_done.append(task.id)
         write_ticket(ticket)
     return True
 
@@ -831,20 +863,41 @@ def _open_pull_request_of(ticket_id: str) -> tuple[Settings, Project, Ticket]:
 
 
 def _fix_pull_request(settings: Settings, project: Project, ticket: Ticket) -> None:
-    """Have the last worker address the open comments, push the fix the way `cw pr` does, then resolve them."""
+    """Fix the open comments, push the way `cw pr` does and resolve them, round after round until none are left.
+
+    A new review can leave new comments, so the loop goes on up to `max_pull_request_fix_rounds`. A round in which
+    the worker changed nothing ends it, since another round would get the same answer.
+    """
     host = setup_git_host(settings, project, project.path)
-    threads = host.open_threads(ticket.pr_number)
-    if not threads:
-        logger.info("No open comments on %s.", ticket.pr_url)
-        return
-    logger.info("%s open comment(s) on %s go to worker %s.", len(threads), ticket.pr_url, ticket.last_worker)
-    worker_result = _fix(settings, project, ticket, prompts.pull_request_comments_instruction(threads))
-    _open_pull_request(settings, project, ticket)
-    host.post_review(
-        ticket.pr_number, f"**{ticket.last_worker}** · {len(threads)} comment(s)\n\n{worker_result.summary}", []
+    rounds = project.profile.limits.max_pull_request_fix_rounds
+    for round_number in range(1, rounds + 1):
+        threads = host.open_threads(ticket.pr_number)
+        if not threads:
+            logger.info("No open comments on %s.", ticket.pr_url)
+            return
+        logger.info(
+            "Fix round %s of %s: %s open comment(s) go to worker %s.",
+            round_number,
+            rounds,
+            len(threads),
+            ticket.last_worker,
+        )
+        tree_before = git.snapshot(project.path)
+        worker_result = _fix(settings, project, ticket, prompts.pull_request_comments_instruction(threads))
+        changed = git.snapshot(project.path) != tree_before
+        _open_pull_request(settings, project, ticket)
+        host.post_review(
+            ticket.pr_number, f"**{ticket.last_worker}** · {len(threads)} comment(s)\n\n{worker_result.summary}", []
+        )
+        for thread in threads:
+            host.resolve_thread(ticket.pr_number, thread.id)
+        if not changed:
+            logger.info("Worker %s changed nothing this round; stopping.", ticket.last_worker)
+            break
+    left = len(host.open_threads(ticket.pr_number))
+    _set_warning(
+        ticket, PULL_REQUEST_WARNING, f"{left} comment(s) still open on {ticket.pr_url} after cw fix." if left else None
     )
-    for thread in threads:
-        host.resolve_thread(ticket.pr_number, thread.id)
 
 
 def fix_pull_request(ticket_id: str) -> Ticket:
