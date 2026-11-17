@@ -4,6 +4,29 @@ A running log of what went wrong in real use, why, and what was changed. Newest 
 
 ---
 
+## 2026-11-17 · Expense tracker from nothing (17 tasks, PostgreSQL); stop on broken checks, `cw fix` loop, containers
+
+**Why:** the biggest ticket so far: a FastAPI expense tracker with cookie auth, seven migrations, CSV import, budgets, reports and a scheduled worker, built in 17 tasks by 3 workers, 65 tests, PR #1. It exposed three gaps in cw.
+
+| # | Symptom | Root cause | Fix |
+|---|---|---|---|
+| 1 | Tasks S3 to S7 were built on untested code: every database test errored, and cw went on to the next task each time | `DATABASE__URL` was not set in the terminal that ran `cw approve`. cw gave each task one fix round, the worker reported the cause, and cw only added a `Checks: now failing` warning | in a task list, checks still failing after the fix round stop the ticket (BLOCKED); `cw resume` runs that task again, then the checks |
+| 2 | `cw fix` had to be run by hand again after the reviewer's new comments | one `cw fix` was one pass | `cw fix` goes round again while the new review leaves comments, up to `max_pull_request_fix_rounds` (3); a round that changed nothing ends it |
+| 3 | The database had to be started by hand, and `.env` could not be written by agents | workers may run only lint and tests, and `.env` was protected | `cw new` sets `compose_file` (`dev/docker-compose.yml`), cw runs `docker compose up --detach --wait` before every worker run and check, and a new project's agents write its local `.env` |
+
+### Measured
+
+Planner $1.34 (2 runs), reviewer $2.05 (4 runs), worker $4.67 (26 runs, 10.5M cached tokens read): about $8.06 for the whole service.
+
+### Left open
+
+- The squash commit message is still the first task's ("feat: add project files, settings and pagination models").
+- Scope warnings are mostly empty `__init__.py` files, which hides the real ones.
+- The ruff hook removes an import that is still unused after an edit, so workers learned to add the usage before the import.
+- The expense tracker's own `compose_file` is not set: its compose file wants port 5432, which the hand-started container already uses.
+
+---
+
 ## 2026-11-16 (night) · The Nexttech kit's rules replace the old Python rulebook; clearer names in cw
 
 **Why:** the agents wrote `from src.tictactoe…` and `from src.inference…` imports. The toolkit's `python-rules` came from an older rulebook that prescribes `src.` imports, `AppException(AppErrorCode.X)` and one-line docstrings, all of which the `nexttech-claude-kit` (the conventions from the internship's code reviews) says are wrong in a Nexttech project.

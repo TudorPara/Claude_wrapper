@@ -67,6 +67,7 @@ struct Limits: Codable, Equatable {
     var agentTimeoutMinutes: Int?
     var checkTimeoutMinutes: Int?
     var maxWorkers: Int?
+    var maxPullRequestFixRounds: Int?
 
     enum CodingKeys: String, CodingKey {
         case maxReviewRounds = "max_review_rounds"
@@ -81,6 +82,7 @@ struct Limits: Codable, Equatable {
         case agentTimeoutMinutes = "agent_timeout_minutes"
         case checkTimeoutMinutes = "check_timeout_minutes"
         case maxWorkers = "max_workers"
+        case maxPullRequestFixRounds = "max_pull_request_fix_rounds"
     }
 }
 
@@ -113,6 +115,7 @@ struct Project: Codable, Equatable, Identifiable, Hashable {
     var extraAllowedBash: [String]
     var env: [String: String]
     var profile: Profile
+    var composeFile: String?
 
     var id: String { name }
 
@@ -121,6 +124,7 @@ struct Project: Codable, Equatable, Identifiable, Hashable {
             && lhs.stack == rhs.stack && lhs.gitHost == rhs.gitHost && lhs.commands == rhs.commands
             && lhs.protectedPaths == rhs.protectedPaths
             && lhs.extraAllowedBash == rhs.extraAllowedBash && lhs.env == rhs.env && lhs.profile == rhs.profile
+            && lhs.composeFile == rhs.composeFile
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(name) }
@@ -131,6 +135,7 @@ struct Project: Codable, Equatable, Identifiable, Hashable {
         case gitHost = "git_host"
         case protectedPaths = "protected_paths"
         case extraAllowedBash = "extra_allowed_bash"
+        case composeFile = "compose_file"
     }
 }
 

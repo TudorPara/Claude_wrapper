@@ -28,7 +28,8 @@ cw pr
    │       findings go back to the worker for one fix round
    ├─ cw commits once, pushes and opens the pull request with the review on it
    │
-cw fix      the worker addresses the PR's comments (the reviewer's and colleagues')
+cw fix      the worker addresses the PR's comments (the reviewer's and colleagues'), round after round
+            until the new review leaves none (at most 3 rounds)
 cw merge    squash-merges, only once CI has passed and no blocking finding is left
 ```
 
@@ -58,6 +59,8 @@ Every loop has a limit in the config, so a ticket can't run away in time or cost
 | Limit | Default |
 |---|---|
 | Fix rounds after the review asks for changes | 1, then one re-review |
+| `cw fix` rounds while the PR still has comments | 3 |
+| A task's checks still failing after its fix round | the ticket stops |
 | Fix rounds for checks the ticket broke | 1 |
 | Merge-conflict rounds | 1 |
 | Question rounds per instruction | 1 (after that the worker picks the simplest option and says what it assumed) |

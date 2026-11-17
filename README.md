@@ -64,7 +64,7 @@ First time? Follow [FIRST_RUN.md](FIRST_RUN.md). How it works and why: [EXPLANAT
 | Have it reviewed, nothing committed | `cw review <ticket>` | **Review only** |
 | Review it and open the PR | `cw pr <ticket>` | **Review & open PR** |
 | Continue after a stop, an error or the usage limit | `cw resume <ticket>` | **Resume** |
-| Let the worker address the PR's comments | `cw fix <ticket>` | **Fix comments** |
+| Let the worker address the PR's comments, round after round until none are left | `cw fix <ticket>` | **Fix comments** |
 | Squash-merge once CI passed | `cw merge <ticket>` | **Merge** |
 | Clean up after merging yourself | `cw done <ticket>` (`--abandon` to drop it) | **Mark done** / **More** |
 | Pause a ticket to start another | `cw park <ticket>` | **More → Park** |
@@ -103,7 +103,7 @@ cw resume <ticket>                                              # re-run the ste
 cw review <ticket>                                              # checks and reviewer; nothing is committed
 cw pr <ticket>                                                  # review, commit once, push, open the pull request
 cw ci <ticket>                                                  # the pull request's CI status
-cw fix <ticket>                                                 # the worker addresses the PR's open comments, then push
+cw fix <ticket>                                                 # the worker addresses the PR's comments until none are left
 cw merge <ticket>                                               # squash-merge once CI passed, close the ticket
 cw done <ticket> [--abandon]                                    # close the ticket and switch back
 cw park <ticket>                                                # save the work as a WIP commit and switch back
