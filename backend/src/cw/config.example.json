@@ -72,8 +72,8 @@
       "agent_timeout_minutes": 45,
       "check_timeout_minutes": 15,
       "max_turns": {
-        "planner": 40,
-        "worker": 40,
+        "planner": 60,
+        "worker": 70,
         "reviewer": 30,
         "onboarder": 60
       }
