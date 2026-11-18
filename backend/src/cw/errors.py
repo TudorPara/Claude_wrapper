@@ -15,6 +15,7 @@ class AppErrorCode(Enum):
     COMMAND_FAILED = ("command_failed", "A project command failed.")
     TIMED_OUT = ("timed_out", "A command or agent run took longer than its time limit.")
     AGENT_FAILED = ("agent_failed", "A Claude Code agent run failed.")
+    SESSION_LOST = ("session_lost", "The agent's earlier session no longer exists.")
     USAGE_LIMIT = ("usage_limit", "The Claude usage limit was reached; resume the ticket later.")
     CHECKS_FAILED = ("checks_failed", "Lint or tests still fail after the allowed fix rounds.")
     REVIEW_NOT_APPROVED = ("review_not_approved", "The reviewer still requests changes after the allowed rounds.")

@@ -83,12 +83,19 @@ class GitHubHost:
         result = subprocess.run(["gh", "pr", "checks", str(number)], cwd=self._checkout, capture_output=True, text=True)
         return (result.stdout or result.stderr).strip() or "No checks reported."
 
-    def ci_passed(self, number: int, sha: str) -> bool:
-        """Return whether every check passed or was skipped; gh's exit code also flags pending checks, so read JSON."""
+    def ci_passed(self, number: int, sha: str, checks_expected: bool) -> bool:
+        """Return whether every check on the head passed or was skipped, and the head is this commit.
+
+        gh's exit code also flags pending checks, so read JSON.
+        """
+        head = self._gh("pr", "view", str(number), "--json", "headRefOid", "--jq", ".headRefOid")
+        if head != sha:
+            logger.warning("Pull request %s is at %s, not at the local %s.", number, head, sha)
+            return False
         command = ["gh", "pr", "checks", str(number), "--json", "bucket"]
         result = subprocess.run(command, cwd=self._checkout, capture_output=True, text=True)
         if NO_CHECKS_HINT in result.stderr:
-            return True
+            return not checks_expected
         try:
             checks = json.loads(result.stdout)
         except json.JSONDecodeError as error:
@@ -132,8 +139,11 @@ class GitHubHost:
         """Resolve a review thread."""
         self._gh("api", "graphql", "-f", f"query={RESOLVE_MUTATION}", "-f", f"id={thread_id}")
 
-    def merge(self, number: int, branch: str, message: str) -> None:
-        """Squash-merge through the API, then delete the branch on GitHub; the local checkout is left to cw."""
+    def merge(self, number: int, branch: str, message: str, sha: str) -> None:
+        """Squash-merge through the API, pinned to the checked head, then delete the branch on GitHub.
+
+        GitHub refuses the merge when the head is no longer `sha`. The local checkout is left to cw.
+        """
         repository = self._repository()
         self._gh(
             "api",
@@ -144,5 +154,7 @@ class GitHubHost:
             f"merge_method={SQUASH}",
             "-f",
             f"commit_title={message}",
+            "-f",
+            f"sha={sha}",
         )
         self._gh("api", "--method", "DELETE", f"repos/{repository}/git/refs/heads/{branch}")

@@ -17,7 +17,6 @@ from cw.models import (
     Step,
     Subtask,
     TicketStatus,
-    Verdict,
     WorkerResult,
     WorkerStatus,
 )
@@ -151,13 +150,30 @@ def test_a_session_that_is_gone_is_replaced_by_a_fresh_one_with_the_whole_ticket
 
     def lost_session(prompt: str, cwd: Path, call: int) -> WorkerResult:
         if agents.resumed[-1][1] is not None:
-            raise AppException(AppErrorCode.AGENT_FAILED, "No conversation found")
+            raise AppException(AppErrorCode.SESSION_LOST, "No conversation found")
         return agents.default_worker(prompt, cwd, call)
 
     agents.worker = lost_session
     again = pipeline.follow_up(ticket.id, "rename it")
     assert again.status == TicketStatus.READY
     assert agents.prompts_for(WORKER)[-1].startswith("# add a file\n\n## Request")
+
+
+def test_a_resumed_run_that_fails_keeps_its_session_and_starts_no_fresh_run(
+    local_repository: Path, agents: FakeAgents
+) -> None:
+    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
+    session = ticket.worker_sessions["W1"]
+
+    def crash(prompt: str, cwd: Path, call: int) -> WorkerResult:
+        raise AppException(AppErrorCode.AGENT_FAILED, "printed no result")
+
+    agents.worker = crash
+    with pytest.raises(AppException, match="printed no result"):
+        pipeline.follow_up(ticket.id, "rename it")
+    stored = find_ticket(ticket.id)
+    assert len(agents.prompts_for(WORKER)) == 2
+    assert stored.status == TicketStatus.BLOCKED and stored.worker_sessions["W1"] == session
 
 
 def test_a_broken_check_gets_one_fix_round_then_is_reported(local_repository: Path, agents: FakeAgents) -> None:
@@ -640,7 +656,7 @@ def test_merge_refuses_until_ci_passed_and_no_blocking_finding_is_left(
     remote_repository: Path, agents: FakeAgents, host: FakeHost
 ) -> None:
     finding = ReviewComment(path="work_1.txt", line=1, severity=Severity.BLOCKING, body="wrong")
-    agents.reviewer = lambda prompt: ReviewerResult(verdict=Verdict.APPROVE, summary="fine", comments=[finding])
+    agents.reviewer = lambda prompt: ReviewerResult(summary="fine", comments=[finding])
     ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
     pipeline.open_pull_request(ticket.id)
     with pytest.raises(AppException, match="blocking review finding"):
@@ -655,22 +671,40 @@ def test_merge_refuses_until_ci_passed_and_no_blocking_finding_is_left(
     assert host.merged == [] and find_ticket(ticket.id).status == TicketStatus.PR_OPEN
 
 
+def test_merge_expects_ci_checks_when_the_branch_has_ci_config(
+    remote_repository: Path, agents: FakeAgents, host: FakeHost
+) -> None:
+    def adds_a_workflow(prompt: str, cwd: Path, call: int) -> WorkerResult:
+        (cwd / ".github" / "workflows").mkdir(parents=True)
+        (cwd / ".github" / "workflows" / "ci.yml").write_text("on: pull_request\n")
+        return answer(WorkerStatus.DONE, "added CI")
+
+    agents.worker = adds_a_workflow
+    ticket = pipeline.start_ticket("demo", "add CI", plan_first=False)
+    pipeline.open_pull_request(ticket.id)
+    host.ci = False
+    with pytest.raises(AppException, match="not reported yet"):
+        pipeline.merge_pull_request(ticket.id)
+    assert host.checks_expected == [True] and host.merged == []
+
+
 def test_merge_squash_merges_on_the_host_closes_the_ticket_and_deletes_the_local_branch(
     workspace: Path, remote_repository: Path, agents: FakeAgents, host: FakeHost
 ) -> None:
     ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
     pipeline.open_pull_request(ticket.id)
 
-    def squash_on_the_host(number: int, branch: str, message: str) -> None:
-        host.merged.append((number, branch, message))
+    def squash_on_the_host(number: int, branch: str, message: str, sha: str) -> None:
+        host.merged.append((number, branch, message, sha))
         git(workspace, "clone", str(workspace / "origin.git"), "host")
         git(workspace / "host", "merge", "--squash", f"origin/{branch}")
         git(workspace / "host", "commit", "-m", message)
         git(workspace / "host", "push", "origin", "main")
 
     host.merge = squash_on_the_host
+    pushed = git(remote_repository, "rev-parse", ticket.branch)
     merged = pipeline.merge_pull_request(ticket.id)
-    assert host.merged == [(1, ticket.branch, "feat: work")]
+    assert host.merged == [(1, ticket.branch, "feat: work", pushed)] and host.checks_expected == [False]
     assert merged.status == TicketStatus.DONE
     assert git(remote_repository, "branch", "--show-current") == "main"
     assert ticket.branch not in git(remote_repository, "branch", "--list")
@@ -718,6 +752,15 @@ def test_a_blocking_finding_stays_open_when_a_later_review_sees_only_unrelated_w
     assert "SQL injection" in agents.prompts_for(AgentRole.REVIEWER)[-1]
     with pytest.raises(AppException, match="1 blocking review finding"):
         pipeline.merge_pull_request(ticket.id)
+
+
+def test_plan_feedback_resumes_the_planner_with_only_the_feedback(local_repository: Path, agents: FakeAgents) -> None:
+    ticket = pipeline.start_ticket("demo", "two steps", plan_first=True)
+    pipeline.follow_up(ticket.id, "use one worker")
+    first, second = agents.prompts_for(AgentRole.PLANNER)
+    assert "## Request" in first and "## Request" not in second and "You have up to" not in second
+    assert "use one worker" in second and "## Constraints" in second
+    assert agents.resumed[-1] == (AgentRole.PLANNER, ticket.planner_session)
 
 
 def test_a_planner_that_still_asks_after_its_last_round_is_told_to_plan_and_never_leaves_an_empty_plan(

@@ -213,8 +213,8 @@ def _repo_map(project: Project) -> str:
     return f"## Codebase architecture map\n\n```\n{content}\n```" if content else ""
 
 
-def planner_prompt(project: Project, ticket: Ticket, feedback: str | None) -> str:
-    """Return the planner's task."""
+def planner_prompt(project: Project, ticket: Ticket, feedback: str | None, fresh: bool = True) -> str:
+    """Return the planner's task; a resumed planner already has the request and map, so it gets only what is new."""
     limits = project.profile.limits
     questions_left = limits.max_question_rounds - ticket.question_rounds
     asking = (
@@ -222,6 +222,9 @@ def planner_prompt(project: Project, ticket: Ticket, feedback: str | None) -> st
         if questions_left > 0
         else "You may not ask more questions: make reasonable assumptions and list them at the top of the plan."
     )
+    if not fresh:
+        latest = feedback or ticket.prompts[-1].text
+        return _join(f"## User's answer or feedback on your last plan\n\n{latest}", f"## Constraints\n\n- {asking}")
     commands = ", ".join(f"`{command}` ({name})" for name, command in project.checks())
     checks = f" After the last task cw runs {commands}; the skeleton task must make them work." if commands else ""
     services = (

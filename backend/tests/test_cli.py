@@ -24,7 +24,7 @@ elif agent == "worker":
     answer = {"status": "done", "summary": f"step {step}", "commit_message": "feat: build it", "reason": ""}
     answer |= {"files": [f"step_{step}.txt"], "handoff": "", "questions": [], "project_notes": []}
 else:
-    answer = {"verdict": "approve", "summary": "fine", "comments": []}
+    answer = {"summary": "fine", "comments": []}
 tool_call = {"type": "tool_use", "name": "Read", "input": {"file_path": "README.md"}}
 print(json.dumps({"type": "assistant", "message": {"content": [tool_call]}}))
 print(json.dumps({"type": "result", "is_error": False, "structured_output": answer, "session_id": "s", "num_turns": 2}))

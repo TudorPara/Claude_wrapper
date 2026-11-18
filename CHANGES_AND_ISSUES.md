@@ -4,6 +4,22 @@ A running log of what went wrong in real use, why, and what was changed. Newest 
 
 ---
 
+## 2026-11-18 · B9, B10, B13, B14; runs load only the project's own setup
+
+**Why:** four of the outside review's open bugs, and cw runs still read the personal `.claude/settings.local.json` while blocking the project's own MCP servers.
+
+| # | Problem | Fix |
+|---|---|---|
+| B9 | A PR with no checks reported yet counted as CI passed, so `cw merge` could merge right after a push | No checks passes only when the branch has no `.github/workflows` or `bitbucket-pipelines.yml`; GitHub also needs the PR's head to be the local branch's commit |
+| B10 | The squash merge was not pinned to the commit that passed CI | GitHub's merge gets `sha=<checked commit>` and refuses a moved head; Bitbucket's merge call has no such field, so cw compares the head just before it |
+| B13 | A resumed planner got the whole request and repo map again on every feedback round | A resumed planner gets only the feedback and whether it may still ask |
+| B14 | Any run that printed no result dropped the worker's session and started a fresh, full-price run; a session that really was gone blocked the ticket instead | Checked with Claude Code: a lost session prints an error result, `No conversation found with session ID: …`. That message alone (new `SESSION_LOST`) starts a fresh session; every other failure keeps it. Error results now show Claude Code's `errors` text |
+| Isolation | Runs read `.claude/settings.local.json` (personal) and `--strict-mcp-config` blocked the project's `.mcp.json` | `--setting-sources project`, plus `--mcp-config <checkout>/.mcp.json` when the file exists |
+
+Also: the test stand-ins no longer pass the reviewer's removed `verdict` field. Not run on a real ticket yet.
+
+---
+
 ## 2026-11-18 · Defaults: two review and two fix rounds
 
 **Why:** one fix round often left a finding or a check that a second round would have fixed. The shipped defaults (`config.example.json`, which `cw init` copies) are now 2 review rounds, 2 fix rounds, 3 `cw fix` rounds and planner 40 / worker 70 / reviewer 30 / onboarder 60 turns. Projects keep the profile they were added with: change an existing one in its settings, or with FRIDAY's **Apply models & limits to all projects**. The tests pin their own limits to one round, so they do not depend on the defaults.

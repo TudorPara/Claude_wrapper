@@ -69,6 +69,7 @@ ARTIFACTS_SHOWN = 5
 REVIEW_WARNING = "Review:"
 FETCH_WARNING = "Fetch:"
 LOCAL_WARNING = "Local:"
+CI_CONFIG_PATHS = (".github/workflows", "bitbucket-pipelines.yml")
 DOCKER_COMPOSE = ("docker", "compose", "--file")
 COMPOSE_UP = ("up", "--detach", "--wait")
 USER = "user"
@@ -267,7 +268,7 @@ def _resume_or_start_agent[T: BaseModel](
                 label=label,
             )
         except AppException as error:
-            if error.error_code != AppErrorCode.AGENT_FAILED or error.usage is not None:
+            if error.error_code != AppErrorCode.SESSION_LOST:
                 raise
             logger.info("The %s's session could not be continued; starting a new one.", agent)
             session = None
@@ -465,7 +466,7 @@ def _run_planner(settings: Settings, project: Project, ticket: Ticket, feedback:
         AgentRole.PLANNER,
         PlannerResult,
         ticket.planner_session,
-        lambda fresh: prompts.planner_prompt(project, ticket, feedback),
+        lambda fresh: prompts.planner_prompt(project, ticket, feedback, fresh),
     )
     return plan_result
 
@@ -1042,10 +1043,16 @@ def merge_pull_request(ticket_id: str) -> Ticket:
             f"{len(left)} blocking review finding(s) left: cw fix {ticket.id}, or merge on the host yourself.",
         )
     host = setup_git_host(settings, project, checkout)
-    if not host.ci_passed(ticket.pr_number, git.git(checkout, "rev-parse", ticket.branch)):
-        raise AppException(AppErrorCode.INVALID_STATE, f"CI has not passed on {ticket.pr_url}: cw ci {ticket.id}.")
+    sha = git.git(checkout, "rev-parse", ticket.branch)
+    checks_expected = bool(git.git(checkout, "ls-tree", "--name-only", sha, "--", *CI_CONFIG_PATHS))
+    if not host.ci_passed(ticket.pr_number, sha, checks_expected):
+        raise AppException(
+            AppErrorCode.INVALID_STATE,
+            f"CI has not passed on {ticket.pr_url} at {sha} (failed, pending or not reported yet, or the pull "
+            f"request is not at your local {ticket.branch}): cw ci {ticket.id}.",
+        )
     target = _target(project, ticket)
-    host.merge(ticket.pr_number, ticket.branch, _commit_message(ticket))
+    host.merge(ticket.pr_number, ticket.branch, _commit_message(ticket), sha)
     logger.info("Merged %s into %s.", ticket.pr_url, target)
     if not git.fast_forward(checkout, project.remote, target):
         logger.warning(

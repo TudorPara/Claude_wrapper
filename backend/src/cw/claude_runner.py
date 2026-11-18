@@ -22,8 +22,10 @@ STRUCTURED_OUTPUT_TOOL = "StructuredOutput"
 READ_ONLY_PERMISSION_MODE = "default"
 USAGE_LIMIT_STATUS = 429
 USAGE_LIMIT_HINTS = ("usage limit", "rate limit", "limit reached", "limit will reset")
+SESSION_LOST_HINT = "No conversation found with session ID"
 ORCHESTRATED_ENV = "CW_RUN"
-ISOLATED_SETTING_SOURCES = "project,local"
+ISOLATED_SETTING_SOURCES = "project"
+PROJECT_MCP_FILE = ".mcp.json"
 PROTECTED_PATHS_ENV = "CW_PROTECTED_PATHS"
 SHOWN_TOPICS_ENV = "CW_SHOWN_TOPICS"
 SECRET_ENV_PREFIXES = ("BITBUCKET__",)
@@ -183,7 +185,9 @@ def _usage(data: dict, role: AgentRole, agent: str, model: str) -> RunUsage:
 
 def _raise_for_error(data: dict, usage: RunUsage) -> None:
     """Translate a failed CLI result into the matching error, keeping the tokens it used."""
-    message = str(data.get("result") or data.get("subtype") or "")
+    message = "; ".join(map(str, data.get("errors") or [])) or str(data.get("result") or data.get("subtype") or "")
+    if SESSION_LOST_HINT in message:
+        raise AppException(AppErrorCode.SESSION_LOST, message, usage)
     if data.get("api_error_status") == USAGE_LIMIT_STATUS or any(hint in message.lower() for hint in USAGE_LIMIT_HINTS):
         raise AppException(AppErrorCode.USAGE_LIMIT, message, usage)
     raise AppException(AppErrorCode.AGENT_FAILED, message, usage)
@@ -304,6 +308,8 @@ def _run_agent[T: BaseModel](
             "--setting-sources",
             ISOLATED_SETTING_SOURCES,
         ]
+        if (cwd / PROJECT_MCP_FILE).is_file():
+            command += ["--mcp-config", str(cwd / PROJECT_MCP_FILE)]
         for plugin in _toolkit_plugins(settings, project):
             command += ["--plugin-dir", str(plugin_dir(settings, plugin))]
         if resume_session:
@@ -321,7 +327,8 @@ def _run_agent[T: BaseModel](
     data = _result_event(stdout)
     if data is None:
         logger.error("%s printed no result; stderr: %s", agent.name, stderr[-ERROR_TAIL_CHARS:])
-        raise AppException(AppErrorCode.AGENT_FAILED, stderr[-ERROR_TAIL_CHARS:])
+        code = AppErrorCode.SESSION_LOST if SESSION_LOST_HINT in stderr else AppErrorCode.AGENT_FAILED
+        raise AppException(code, stderr[-ERROR_TAIL_CHARS:])
     usage = _usage(data, role, agent.name, model)
     if data.get("is_error"):
         _raise_for_error(data, usage)

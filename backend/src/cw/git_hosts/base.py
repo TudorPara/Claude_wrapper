@@ -38,8 +38,8 @@ class GitHost(Protocol):
         """Return a short, human-readable CI status."""
         ...
 
-    def ci_passed(self, number: int, sha: str) -> bool:
-        """Return whether every reported check passed; a pull request without checks passes."""
+    def ci_passed(self, number: int, sha: str, checks_expected: bool) -> bool:
+        """Return whether every check on this commit passed; none reported passes only when no CI is configured."""
         ...
 
     def open_threads(self, number: int) -> list[PullRequestThread]:
@@ -50,6 +50,6 @@ class GitHost(Protocol):
         """Mark a comment thread resolved."""
         ...
 
-    def merge(self, number: int, branch: str, message: str) -> None:
-        """Squash-merge the pull request and delete its branch on the host."""
+    def merge(self, number: int, branch: str, message: str, sha: str) -> None:
+        """Squash-merge the pull request only while its head is this commit, then delete its branch on the host."""
         ...

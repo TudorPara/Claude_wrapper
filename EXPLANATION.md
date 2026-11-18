@@ -120,7 +120,7 @@ you: cw merge → refused while CI has not passed or a blocking finding is open 
 - **Nothing is committed or pushed until `cw pr`.** Then exactly one commit is made.
 - **The review cannot be skipped.** `cw pr` always reviews first and then opens the PR. cw judges a review by its findings' severities, not by the reviewer's own verdict: every blocking finding goes on the ticket's list of open findings, each with an id (`F1`, `F2`, …). A later round sees only the new diff, but it is given the open findings and names the ones the code now fixes; the others stay open, so reviewing only new work never drops one. Findings left after the fix round are on the PR and on the ticket; you decide what to do with them. Findings on a file that does not exist are dropped, and a line past the end of its file is moved onto the last line. `cw review` runs the same review alone. The reviewer is told that the "Notes kept by cw" section of `CLAUDE.md` ships on purpose, whenever the diff contains it.
 - **PR comments are worked off with `cw fix`.** It reads the open (unresolved) comment threads on lines of the PR, from the reviewer agent and from people, and the ticket's open blocking findings, gives them to the last worker in one instruction, then runs the same steps as `cw pr`: checks, review, a new commit, push. It posts the worker's summary on the PR, which says why a comment needed no change, and resolves the threads it sent. Comments in the PR's general conversation are not read. Only the first review of a PR is posted as line threads; later reviews are posted as one comment, so cw's own re-reviews never feed the next `cw fix`. Their blocking findings stay open on the ticket, so `cw fix` goes round again while any is open, up to `max_pull_request_fix_rounds` (3), and stops after a round in which the worker changed nothing. Minor findings never start another round, and `cw merge` refuses while a blocking finding is open. (Until 2026-11-18 each round's review opened new PR threads that fed the next round, minor ones included, so the loop rarely ended early.)
-- **`cw merge` squash-merges, and only when it is safe.** It refuses while the PR's CI has not passed (a PR without checks passes), while a blocking finding is open, or while the checkout has uncommitted changes on the ticket's branch. Then it squash-merges on the host with the ticket's commit message, deletes the branch there, fast-forwards your local base branch to the host's (a warning if it has diverged), deletes the local branch, and closes the ticket like `cw done`.
+- **`cw merge` squash-merges, and only when it is safe.** It refuses while the PR's CI has not passed on your local branch's commit (no checks reported counts as passed only when the branch has no `.github/workflows` or `bitbucket-pipelines.yml`, so a merge right after a push waits for CI), while a blocking finding is open, or while the checkout has uncommitted changes on the ticket's branch. Then it squash-merges on the host with the ticket's commit message, pinned to that commit (GitHub refuses the merge when the head moved; on Bitbucket cw compares the head just before merging), deletes the branch there, fast-forwards your local base branch to the host's (a warning if it has diverged), deletes the local branch, and closes the ticket like `cw done`.
 - **Conflict resolutions are checked and reviewed.** When merging the base stops on conflicts, the worker resolves them; then cw runs the checks (with their fix round) and reviews the resolved files before it pushes. A clean merge brings only the base's own, already reviewed work, so the review skips it.
 - **A task whose checks still fail after its fix round stops the ticket** instead of letting the next task build on untested code. The cause is often outside the code (a missing setting, a database that is not running), and the worker's summary says so. Fix it and run `cw resume`: the task runs again, then the checks.
 - **cw starts the project's containers.** When a project has a `compose_file` and the file exists, cw runs `docker compose --file <file> up --detach --wait` before the baseline, every worker run and every check, because workers may run only the lint and test commands. Starting them before the baseline keeps tests that need a database from being recorded as "already failing on the base" and never enforced. When they do not start there, the ticket is not created and the checkout goes back to where it was. It returns at once when the containers already run. A failure (Docker not running, a port already taken) stops the ticket with Docker's reason. `cw new` sets `compose_file` to `dev/docker-compose.yml`, and the planner's skeleton task writes that file, with a healthcheck per service.
@@ -173,6 +173,7 @@ The `.md` holds, in this order: the request (all your prompts), questions and an
 - **The checks run after every task**, so a broken step is fixed before the next task builds on it.
 - **Worker sessions have a size limit.** When a run's average turn passes 45k tokens (cached and uncached together), that worker starts a fresh session next time, seeded from the ticket.
 - **Older tasks are shortened in a worker's view**: their summary is dropped, but their files and handoff stay, because later tasks build on them. The ticket's `.md` keeps everything.
+- **A resumed planner gets only what is new**: your feedback and whether it may still ask, not the request and repo map again.
 - **The planner hands over what it read**: a `context_pack` of 5–15 `path:lines` with the reason, shown to every new worker session so it starts reading in the right place.
 - **The planner gets a repo map**: `~/.cw/projects/<project>/repo_map.txt`, made without an LLM from `git ls-files` (so `.gitignore` is respected), at most 250 lines. When the full outline is too long it falls back to one line per file, then one line per folder, so no folder is dropped. It is refreshed at every ticket start and by `cw project map <name>`.
 - **The project's `CLAUDE.md` is its memory across tickets.** Claude Code loads it into every session in the project, cw's agents included (checked on 2026-11-13 with cw's own isolation flags). Every worker must return `project_notes` (an answer without the field is rejected): lasting facts such as a command, where a kind of code lives, or a decision. cw adds new ones, without duplicates, to the section `## Notes kept by cw` of that file. The change is part of the ticket's diff, so the reviewer sees it and it is committed with the code; past 40 notes the ticket warns you to prune the section.
@@ -228,7 +229,7 @@ The Python rulebook used to be one 500-line file that, after the first token fix
 | `ponytail@ponytail` | DietrichGebert/ponytail | Laziest correct solution; enabled for every project |
 | `pyright-lsp@claude-plugins-official` | anthropics/claude-plugins-official | Python language server for code navigation; needs `pyright` installed |
 
-**Isolation:** cw runs ignore your personal MCP servers and plugins (`--strict-mcp-config`, `--setting-sources project,local`). cw agents also cannot load skills on demand, by design: the rules they need are pinned or shown by hook, so nothing depends on the model deciding to look. Adding a team MCP server means enabling its plugin for a stack **and** dropping `--strict-mcp-config` for the agents that need it; every server costs context on every turn, so it isn't built.
+**Isolation:** cw runs load only the project's own setup and the toolkit: the repository's committed `.claude/settings.json` (`--setting-sources project`, so neither your user settings nor your personal `.claude/settings.local.json`), the MCP servers in the repository's `.mcp.json` when it has one (`--strict-mcp-config --mcp-config .mcp.json`), and the toolkit plugins (`--plugin-dir`). Your personal plugins and MCP servers never load. cw agents also cannot load skills on demand, by design: the rules they need are pinned or shown by hook, so nothing depends on the model deciding to look. A team MCP server goes in the project's `.mcp.json`; every server costs context on every turn, so add only what the agents use.
 
 ---
 
@@ -246,7 +247,8 @@ claude -p --output-format stream-json --verbose
   --json-schema '<pydantic schema>'   forces the structured answer
   --permission-mode acceptEdits|default
   --max-turns <config>
-  --strict-mcp-config --setting-sources project,local      ← isolation from personal setup
+  --strict-mcp-config --setting-sources project            ← isolation from personal setup
+  [--mcp-config <checkout>/.mcp.json]  the project's own MCP servers, when it has the file
   --plugin-dir <toolkit>/plugins/core --plugin-dir <toolkit>/plugins/<stack>
   [--resume <session>]                the planner's, or the worker's, own earlier session
   < the prompt on stdin
@@ -256,7 +258,7 @@ cwd = the project checkout   env = yours without cw's secrets + project env + CW
 - cw reads the stream line by line and logs every tool call (`worker · Edit src/app/routes/items.py`), which is what you see live in the terminal. It also appends each start, tool call, end and failure, labelled with the worker and task (`W2 · S3`), to `~/.cw/tickets/<project>/<id>.events.jsonl`, together with every check cw runs. `cw events <id> --json` prints the latest ones; FRIDAY follows a ticket through it, whether the run was started in FRIDAY or in a terminal. Each run in the ticket also carries that label, so cost can be shown per worker.
 - The last `result` line carries the structured answer and the usage numbers. The tokens of a failed run are recorded too.
 - The process runs in its own process group with a time limit (`agent_timeout_minutes`). Ctrl+C, FRIDAY's Stop and the time limit kill the agent and everything it started.
-- A session that can no longer be resumed is replaced by a new one that gets the whole ticket.
+- A session that can no longer be resumed (Claude Code answers "No conversation found with session ID") is replaced by a new one that gets the whole ticket. Any other failure keeps the session, so `cw resume` continues it instead of paying for a fresh one.
 - An error with HTTP 429 or "usage/rate limit" in its text makes the ticket **paused**; any other failure makes it **blocked**.
 
 ---
@@ -347,7 +349,7 @@ Polling: the ticket list every 3 seconds, the open ticket and its events every 2
 
 ## 16. Verified, and not verified
 
-**Verified by tests that run the real cw code with a stand-in for `claude`** (`cd backend && uv run pytest`, 97 tests):
+**Verified by tests that run the real cw code with a stand-in for `claude`** (`cd backend && uv run pytest`, 106 tests):
 - a project created from an idea, planned, approved, built in two tasks, reviewed, committed once and merged by `cw done`, through the command line;
 - related tasks continue one worker session, another worker gets a new one and is told what happened;
 - a worker's question is answered by the planner; one the planner cannot answer goes to you and your reply reaches the worker;
@@ -362,7 +364,10 @@ Polling: the ticket list every 3 seconds, the open ticket and its events every 2
 - a planner that still asks after its last question round is told once to plan, and an empty plan waits for you instead of reaching approval; a killed `cw review` resumes as a review; `cw split` creates paused tickets without running an agent and abandons the original last; a ticket adds at most five project notes; the ruff hook keeps an import added for the next edit;
 - `cw merge` refuses while a blocking finding is open or CI has not passed, and otherwise merges, fast-forwards the local base branch, closes the ticket and deletes the local branch;
 - the review's fix round gets every finding, minor ones included; `cw stats` counts a resumed session's cost once; a file named in a task's instructions is in its scope; the worker may narrow the lint and test commands to a path but not run another script;
-- the reviewer is told about cw's notes only when the diff contains them.
+- the reviewer is told about cw's notes only when the diff contains them;
+- only a session Claude Code reports as lost is replaced, and any other failed run keeps its session; plan feedback resumes the planner with only the feedback;
+- `cw merge` expects CI checks when the branch has CI config, and the merge is pinned to the checked commit on both hosts (with `gh` and the Bitbucket API stubbed);
+- a run loads only the project's settings and its `.mcp.json`.
 
 **Verified on real projects with the real Claude Code (2.1.311) and GitHub, on 2026-11-16** (`CHANGES_AND_ISSUES.md` has each run):
 - three tickets: a one-file test on an existing repository (direct route), a 2-task, 11-file change to the same repository (planned route), and a project created from nothing with `cw new --github private` (6 tasks, 4 workers, 29 files);
@@ -382,13 +387,9 @@ Polling: the ticket list every 3 seconds, the open ticket and its events every 2
 - `cw review` on a ticket whose PR is open sets it back to `ready`, and `cw merge` then refuses. Run `cw pr` again, then `cw merge`;
 - a planned ticket's commit and squash-merge message is the first task's message (for example "chore: add project skeleton"), not one for the whole change. Edit it on the host if it matters.
 
-**Open from the outside review of 2026-11-18** (`CHANGES_AND_ISSUES.md` has the list; B1–B8 and B15 are fixed):
-- B9: a PR with no checks reported yet counts as CI passed, so `cw merge` can merge right after a push;
-- B10: the squash merge is not pinned to the commit that passed CI;
+**Open from the outside review of 2026-11-18** (`CHANGES_AND_ISSUES.md` has the list; B1–B10, B13–B15 are fixed):
 - B11: `cw fix` resolves every thread it sent, also people's threads the worker declined;
 - B12: onboarding again overwrites the decisions in `conventions.md`;
-- B13: a resumed planner gets the whole request and repo map again on every feedback round;
-- B14: any run that prints no result drops the worker's session and starts a fresh, full-price run;
 - B16–B21: Bitbucket review posting, task ids on re-planning, a non-atomic project lock, `tail -f` allowed for workers, `cw done` without a remote, and a stray `skills/` file in the repository.
 
 **Known limits:** one open ticket per project; no Java stack plugin; the toolkit isn't published.

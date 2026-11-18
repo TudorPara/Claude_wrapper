@@ -14,7 +14,6 @@ from cw.models import (
     ReviewerResult,
     RunUsage,
     Subtask,
-    Verdict,
     WorkerResult,
     WorkerStatus,
     utc_now,
@@ -57,9 +56,7 @@ class FakeAgents:
         self.review_files: list[list[str] | None] = []
         self.labels: list[str] = []
         self.worker: Callable[[str, Path, int], WorkerResult] = self.default_worker
-        self.reviewer: Callable[[str], ReviewerResult] = lambda prompt: ReviewerResult(
-            verdict=Verdict.APPROVE, summary="fine", comments=[]
-        )
+        self.reviewer: Callable[[str], ReviewerResult] = lambda prompt: ReviewerResult(summary="fine", comments=[])
         self.planner: Callable[[str], PlannerResult] | None = None
         self.task_workers = ["W1", "W1"]
         self.planner_answers = ["use the settings value"]
@@ -109,7 +106,8 @@ class FakeHost:
         self.threads: list[PullRequestThread] = []
         self.resolved: list[str] = []
         self.ci = True
-        self.merged: list[tuple[int, str, str]] = []
+        self.checks_expected: list[bool] = []
+        self.merged: list[tuple[int, str, str, str]] = []
 
     def create_pull_request(self, branch: str, base_branch: str, title: str, body: str) -> PullRequest:
         self.targets.append(base_branch)
@@ -122,7 +120,8 @@ class FakeHost:
             PullRequestThread(id=f"R{len(self.threads) + 1}", path=c.path, line=c.line, body=c.body) for c in comments
         ]
 
-    def ci_passed(self, number: int, sha: str) -> bool:
+    def ci_passed(self, number: int, sha: str, checks_expected: bool) -> bool:
+        self.checks_expected.append(checks_expected)
         return self.ci
 
     def open_threads(self, number: int) -> list[PullRequestThread]:
@@ -131,8 +130,8 @@ class FakeHost:
     def resolve_thread(self, number: int, thread_id: str) -> None:
         self.resolved.append(thread_id)
 
-    def merge(self, number: int, branch: str, message: str) -> None:
-        self.merged.append((number, branch, message))
+    def merge(self, number: int, branch: str, message: str, sha: str) -> None:
+        self.merged.append((number, branch, message, sha))
 
 
 @pytest.fixture
