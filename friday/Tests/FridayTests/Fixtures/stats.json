@@ -1,0 +1,29 @@
+[
+  {
+    "project": "expense-tracker",
+    "role": "planner",
+    "runs": 4,
+    "input_tokens": 57000,
+    "output_tokens": 10500,
+    "cache_read_tokens": 525000,
+    "cost_usd": 2.04
+  },
+  {
+    "project": "expense-tracker",
+    "role": "reviewer",
+    "runs": 2,
+    "input_tokens": 38400,
+    "output_tokens": 7560,
+    "cache_read_tokens": 378000,
+    "cost_usd": 1.07
+  },
+  {
+    "project": "expense-tracker",
+    "role": "worker",
+    "runs": 2,
+    "input_tokens": 52800,
+    "output_tokens": 10920,
+    "cache_read_tokens": 546000,
+    "cost_usd": 0.58
+  }
+]

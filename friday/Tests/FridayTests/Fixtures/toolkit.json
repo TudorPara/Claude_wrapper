@@ -1,0 +1,174 @@
+{
+  "path": "/Users/dev/cw/toolkit",
+  "version": "0.4.0",
+  "marketplace": "nexttech-toolkit",
+  "always_plugins": [
+    "core"
+  ],
+  "always_external_plugins": [
+    "ponytail@ponytail"
+  ],
+  "agents": [
+    {
+      "name": "onboarder",
+      "plugin": "core",
+      "description": "Read-only project onboarding. Maps an existing repository - stack, commands, architecture, tests - and compares its conventions with the team's stack rules. Use once when a project joins the toolkit.",
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "StructuredOutput"
+      ],
+      "model": "sonnet",
+      "skills": [],
+      "path": "/Users/dev/cw/toolkit/plugins/core/agents/onboarder.md"
+    },
+    {
+      "name": "planner",
+      "plugin": "core",
+      "description": "Read-only planner. Turns a request into a short plan with a clear, ordered task list assigned to workers, asks clarifying questions when the request is ambiguous, and answers the workers' questions. Use before larger or unclear changes.",
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "StructuredOutput"
+      ],
+      "model": "opus",
+      "skills": [
+        "core:engineering",
+        "core:ponytail",
+        "core:rule-precedence"
+      ],
+      "path": "/Users/dev/cw/toolkit/plugins/core/agents/planner.md"
+    },
+    {
+      "name": "reviewer",
+      "plugin": "core",
+      "description": "Read-only code reviewer. Checks a diff against the request, the plan, the team rules and the project conventions, and returns line comments marked blocking or minor. Runs before every pull request, and when the user asks for a review.",
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "StructuredOutput"
+      ],
+      "model": "opus",
+      "skills": [
+        "core:engineering",
+        "core:ponytail",
+        "core:rule-precedence",
+        "core:pr-review"
+      ],
+      "path": "/Users/dev/cw/toolkit/plugins/core/agents/reviewer.md"
+    },
+    {
+      "name": "worker",
+      "plugin": "core",
+      "description": "Implements one request or one planned task in the project checkout, following the team rules and project conventions. Does not commit. cw runs it for every code change; in an interactive session, use it only when the user asks to delegate.",
+      "tools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Bash",
+        "Grep",
+        "Glob",
+        "StructuredOutput"
+      ],
+      "model": "sonnet",
+      "skills": [
+        "core:engineering",
+        "core:ponytail",
+        "core:rule-precedence"
+      ],
+      "path": "/Users/dev/cw/toolkit/plugins/core/agents/worker.md"
+    }
+  ],
+  "skills": [
+    {
+      "name": "bootstrap-project",
+      "plugin": "core",
+      "description": "Start a new project the team way - git repo, CLAUDE.md, toolkit settings, first commit, remote repository on GitHub or Bitbucket, and push. An extended /init. Run it only when the user asks for it.",
+      "model_invocable": false,
+      "pin": false,
+      "path": "/Users/dev/cw/toolkit/plugins/core/skills/bootstrap-project/SKILL.md"
+    },
+    {
+      "name": "clean-code",
+      "plugin": "core",
+      "description": "This skill embodies the principles of \"Clean Code\" by Robert C. Martin (Uncle Bob). Use it to transform \"code that works\" into \"code that is clean.\"",
+      "model_invocable": true,
+      "pin": false,
+      "path": "/Users/dev/cw/toolkit/plugins/core/skills/clean-code/SKILL.md"
+    },
+    {
+      "name": "engineering",
+      "plugin": "core",
+      "description": "Nexttech's engineering rules for any language - generic configuration, no over-engineering, how to work, naming, verifying by running. Use for any code, design or review task.",
+      "model_invocable": true,
+      "pin": true,
+      "path": "/Users/dev/cw/toolkit/plugins/core/skills/engineering/SKILL.md"
+    },
+    {
+      "name": "ponytail",
+      "plugin": "core",
+      "description": "Lazy senior dev mode: the smallest change that fully solves the task, and a reply a busy human understands in one read. Use on any coding task (writing, fixing, refactoring, reviewing, choosing dependencies) and when the user says \"ponytail\", \"be lazy\", \"simplest solution\", \"yagni\", or complains about over-engineering or bloat.\n",
+      "model_invocable": true,
+      "pin": false,
+      "path": "/Users/dev/cw/toolkit/plugins/core/skills/ponytail/SKILL.md"
+    },
+    {
+      "name": "pr-review",
+      "plugin": "core",
+      "description": "How Nexttech reviews a change before a pull request - check the request, correctness and the team rules, name the rule each finding breaks, and weigh each finding as blocking or minor. Use when reviewing a diff or a pull request.",
+      "model_invocable": true,
+      "pin": false,
+      "path": "/Users/dev/cw/toolkit/plugins/core/skills/pr-review/SKILL.md"
+    },
+    {
+      "name": "rule-precedence",
+      "plugin": "core",
+      "description": "Which rule wins when the project's conventions, the Nexttech rules, ponytail and clean-code disagree, and how the Nexttech rules apply inside a cw run. Use whenever two of them point in different directions.",
+      "model_invocable": true,
+      "pin": false,
+      "path": "/Users/dev/cw/toolkit/plugins/core/skills/rule-precedence/SKILL.md"
+    },
+    {
+      "name": "python-rules",
+      "plugin": "python",
+      "description": "The Nexttech rules for Python: an index of the topic files, which are the nexttech-claude-kit skills without the reviewers' names (core rules, Python style, stack, service architecture, configuration, errors and logging, data and migrations, agents, git and PR, the PR review procedure). Use it for any Python code, design or review task.",
+      "model_invocable": true,
+      "pin": true,
+      "path": "/Users/dev/cw/toolkit/plugins/python/skills/python-rules/SKILL.md"
+    }
+  ],
+  "stacks": {
+    "python": {
+      "markers": [
+        "pyproject.toml",
+        "requirements.txt",
+        "setup.py"
+      ],
+      "toolkit_plugins": [
+        "python"
+      ],
+      "pinned_skills": [],
+      "external_plugins": [
+        "pyright-lsp@claude-plugins-official"
+      ],
+      "commands": {
+        "lint": "uv run ruff check .",
+        "test": "uv run pytest"
+      }
+    }
+  },
+  "project_models": {
+    "expense-tracker": {
+      "planner": "opus",
+      "worker": "sonnet",
+      "reviewer": "opus",
+      "onboarder": "sonnet",
+      "reviewers": [
+        "reviewer"
+      ]
+    }
+  }
+}

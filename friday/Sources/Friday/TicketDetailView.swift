@@ -1,173 +1,211 @@
-import AppKit
 import SwiftUI
 
+/// One ticket: where it is, which agents work on it, what they did, and what you can do next.
 struct TicketDetailView: View {
     @Environment(Store.self) private var store
-    var ticketId: String
-    @State private var ticket: Ticket?
+    @Environment(\.isSnapshot) private var isSnapshot
+    let ticketId: String
+    @State private var feed: TicketFeed
 
-    private var summary: TicketSummary? { store.tickets.first { $0.id == ticketId } }
-    private var job: Job? { store.job(for: ticketId) }
-    private var running: Bool { summary?.running == true || job?.running == true }
+    init(ticketId: String) {
+        self.ticketId = ticketId
+        _feed = State(initialValue: TicketFeed(ticketId: ticketId))
+    }
 
     var body: some View {
-        ScrollView {
-            if let ticket {
-                VStack(alignment: .leading, spacing: 16) {
-                    header(ticket)
-                    actions(ticket)
-                    if !ticket.questions.isEmpty { questions(ticket) }
-                    if let job { Card(title: "Live output", systemImage: "terminal") { LogView(text: job.log) } }
-                    prompts(ticket)
-                    if !ticket.plan.isEmpty { plan(ticket) }
-                    if !ticket.workLog.isEmpty { workLog(ticket) }
-                    if !ticket.reviews.isEmpty { reviews(ticket) }
-                    if !ticket.runs.isEmpty { usage(ticket) }
-                }
-                .padding(20)
-            } else {
-                ProgressView().padding(40)
-            }
-        }
-        .task(id: summary?.updatedAt) { ticket = await store.ticket(ticketId) }
-    }
-
-    private func header(_ ticket: Ticket) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                StatusChip(status: ticket.status, running: running)
-                Text(ticket.route == "planned" ? "planned" : "direct").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                if let url = ticket.prUrl, let link = URL(string: url) {
-                    Link(destination: link) { Label("Open PR", systemImage: "arrow.up.right.square") }
-                }
-
-            }
-            Text(ticket.title).font(.title2.bold()).textSelection(.enabled)
-            Text("\(ticket.id) · \(ticket.branch) · from \(ticket.baseBranch) · \(ticket.owner)")
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-            PipelineView(status: ticket.status, route: ticket.route)
-            if let error = ticket.error {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
-                    .font(.callout)
-                    .textSelection(.enabled)
-            }
-        }
-    }
-
-    private func actions(_ ticket: Ticket) -> some View {
-        NextStepCard(ticket: ticket)
-    }
-
-    private func questions(_ ticket: Ticket) -> some View {
-        Card(title: "Questions from the planner", systemImage: "questionmark.bubble") {
-            ForEach(ticket.questions, id: \.self) { Text("• \($0)").textSelection(.enabled) }
-        }
-    }
-
-    private func prompts(_ ticket: Ticket) -> some View {
-        Card(title: "Prompts", systemImage: "text.bubble") {
-            ForEach(ticket.prompts, id: \.self) { entry in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.at.shortTimestamp).font(.caption2).foregroundStyle(.secondary)
-                    Text(entry.text).textSelection(.enabled)
-                }
-            }
-        }
-    }
-
-    private func plan(_ ticket: Ticket) -> some View {
-        Card(title: "Plan", systemImage: "list.bullet.rectangle") {
-            Text(markdown(ticket.plan)).textSelection(.enabled)
-            if !ticket.optionsConsidered.isEmpty {
-                DisclosureGroup("Options considered") { Text(markdown(ticket.optionsConsidered)).textSelection(.enabled) }
-            }
-            ForEach(ticket.subtasks, id: \.self) { subtask in
-                VStack(alignment: .leading, spacing: 4) {
-                    let done = (ticket.tasksDone ?? []).contains(subtask.id)
-                    Label("\(subtask.id) · \(subtask.title)", systemImage: done ? "checkmark.circle.fill" : "circle")
-                        .fontWeight(.semibold)
-                        .foregroundStyle(done ? .green : .primary)
-                    Text(subtask.files.joined(separator: "  ")).font(.caption.monospaced()).foregroundStyle(.secondary)
-                }
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
-            }
-        }
-    }
-
-    private func workLog(_ ticket: Ticket) -> some View {
-        Card(title: "Work log", systemImage: "hammer") {
-            ForEach(ticket.workLog, id: \.self) { entry in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(entry.at.shortTimestamp) · \(entry.subtask ?? "worker") · \(entry.status)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(entry.summary).textSelection(.enabled)
-                }
-            }
-        }
-    }
-
-    private func reviews(_ ticket: Ticket) -> some View {
-        Card(title: "Review", systemImage: "checkmark.seal") {
-            ForEach(ticket.reviews, id: \.self) { review in
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("Round \(review.round) · \(review.reviewer)").fontWeight(.semibold)
-                        Text(review.verdict).foregroundStyle(review.verdict == "approve" ? .green : .orange)
-                    }
-                    Text(review.summary).textSelection(.enabled)
-                    ForEach(review.comments, id: \.self) { comment in
-                        HStack(alignment: .top) {
-                            Text(comment.severity)
-                                .font(.caption2.bold())
-                                .foregroundStyle(comment.severity == "blocking" ? .red : .secondary)
-                                .frame(width: 60, alignment: .leading)
-                            Text("\(comment.path):\(comment.line)").font(.caption.monospaced())
-                            Text(comment.body).font(.callout)
+        @Bindable var store = store
+        Group {
+            if let ticket = feed.ticket {
+                let running = store.isRunning(ticketId)
+                let active = activeRun(in: feed.events, running: running)
+                let agents = ticket.agents(active: active)
+                VStack(spacing: 0) {
+                    TicketHeader(ticket: ticket, running: running)
+                    PipelineBar(stages: ticket.stages(active: active, lastEvent: feed.events.last), ticket: ticket)
+                    AgentStrip(agents: agents, selected: $store.showAgent)
+                    Picker("Section", selection: $store.ticketTab) {
+                        ForEach(TicketTab.allCases) { tab in
+                            Text(tabTitle(tab, ticket: ticket)).tag(tab)
                         }
-                        .textSelection(.enabled)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    Divider()
+                    ScrollView {
+                        tabContent(ticket, active: active)
+                            .padding(20)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    Divider()
+                    NextStepBar(ticket: ticket, active: active, running: running)
+                    Composer(ticket: ticket, running: running)
+                }
+                .background(Color(nsColor: .windowBackgroundColor))
+                .inspector(isPresented: Binding(get: { store.showAgent != nil && !isSnapshot }, set: { if !$0 { store.showAgent = nil } })) {
+                    if let card = agents.first(where: { $0.id == store.showAgent }) {
+                        AgentInspector(card: card, ticket: ticket, active: active)
+                            .inspectorColumnWidth(min: 280, ideal: 320, max: 420)
                     }
                 }
+                .overlay(alignment: .trailing) {
+                    if isSnapshot, let card = agents.first(where: { $0.id == store.showAgent }) {
+                        HStack(spacing: 0) {
+                            Divider()
+                            AgentInspector(card: card, ticket: ticket, active: active)
+                                .frame(width: 320)
+                                .background(Color(nsColor: .windowBackgroundColor))
+                        }
+                    }
+                }
+            } else if feed.loaded {
+                ContentUnavailableView("Ticket not found", systemImage: "questionmark.folder", description: Text(ticketId))
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        }
+        .task { await feed.follow(using: store) }
+    }
+
+    private func tabTitle(_ tab: TicketTab, ticket: Ticket) -> String {
+        switch tab {
+        case .plan where !ticket.subtasks.isEmpty: "Plan \(ticket.tasksDone.count)/\(ticket.subtasks.count)"
+        case .review where !ticket.openFindings.isEmpty: "Review · \(ticket.openFindings.count) open"
+        default: tab.rawValue
         }
     }
 
-    private func usage(_ ticket: Ticket) -> some View {
-        Card(title: "Agent runs", systemImage: "gauge.with.dots.needle.33percent") {
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
-                GridRow {
-                    ForEach(["Role", "Agent", "Model", "Input", "Output", "Cached", "Turns", "Time"], id: \.self) {
-                        Text($0).font(.caption.bold()).foregroundStyle(.secondary)
+    @ViewBuilder
+    private func tabContent(_ ticket: Ticket, active: ActiveRun?) -> some View {
+        switch store.ticketTab {
+        case .overview: OverviewTab(ticket: ticket, active: active)
+        case .plan: PlanTab(ticket: ticket)
+        case .work: WorkTab(ticket: ticket)
+        case .review: ReviewTab(ticket: ticket)
+        case .activity: ActivityTab(ticket: ticket, events: feed.events, job: store.job(for: ticket.id))
+        case .cost: CostTab(ticket: ticket)
+        }
+    }
+}
+
+private struct TicketHeader: View {
+    @Environment(Store.self) private var store
+    let ticket: Ticket
+    let running: Bool
+    @State private var confirmAbandon = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(ticket.title).font(.title2.weight(.semibold)).lineLimit(2).textSelection(.enabled)
+                HStack(spacing: 10) {
+                    StatusBadge(status: ticket.status, running: running)
+                    Label(ticket.branch, systemImage: "arrow.triangle.branch").help("from \(ticket.baseBranch)")
+                    Label(ticket.isPlanned ? "Planned" : "Direct", systemImage: ticket.isPlanned ? "map" : "bolt")
+                    if let url = ticket.prUrl.flatMap(URL.init(string:)) {
+                        Link(destination: url) { Label("PR #\(ticket.prNumber ?? 0)", systemImage: "arrow.triangle.pull") }
                     }
+                    Text(ticket.totalCost.dollars).monospacedDigit().help("What this ticket's agent runs cost so far")
                 }
-                ForEach(ticket.runs, id: \.self) { run in
-                    GridRow {
-                        Text(run.role)
-                        Text(run.agent)
-                        Text(run.model).font(.caption.monospaced())
-                        Text((run.inputTokens + run.cacheCreationTokens).compact)
-                        Text(run.outputTokens.compact)
-                        Text(run.cacheReadTokens.compact)
-                        Text("\(run.numTurns)")
-                        Text("\(run.durationMs / 1000)s")
-                    }
-                    .font(.callout)
-                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
+            Spacer()
+            if let job = store.job(for: ticket.id), job.running {
+                Button(role: .destructive) { store.stop(job) } label: { Label("Stop", systemImage: "stop.fill") }
+                    .help("Stops the agent; the ticket stays resumable")
+            }
+            Menu {
+                Button("Copy ticket id") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(ticket.id, forType: .string)
+                }
+                Divider()
+                Button("Park: save as WIP and switch back") { store.run("Park", project: ticket.project, ticketId: ticket.id, ["park", ticket.id]) }
+                    .disabled(running || ticket.status.isClosed)
+                Button("Done: close it and switch back") { store.run("Done", project: ticket.project, ticketId: ticket.id, ["done", ticket.id]) }
+                    .disabled(running || ticket.status.isClosed)
+                Divider()
+                Button("Abandon…", role: .destructive) { confirmAbandon = true }
+                    .disabled(running || ticket.status.isClosed)
+            } label: {
+                Label("More", systemImage: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 8)
+        .confirmationDialog("Abandon “\(ticket.title)”?", isPresented: $confirmAbandon) {
+            Button("Abandon and delete the branch", role: .destructive) {
+                store.run("Abandon", project: ticket.project, ticketId: ticket.id, ["done", ticket.id, "--abandon"])
+            }
+        } message: {
+            Text("Its uncommitted changes are discarded and \(ticket.branch) is deleted. This can't be undone.")
+        }
+    }
+}
+
+private struct PipelineBar: View {
+    let stages: [(Stage, StageState)]
+    let ticket: Ticket
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(stages, id: \.0) { stage, state in
+                HStack(spacing: 5) {
+                    icon(state)
+                    Text(title(stage)).lineLimit(1)
+                }
+                .font(.caption.weight(state == .active || state == .waiting ? .semibold : .regular))
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+                .background(color(state).opacity(state == .pending || state == .skipped ? 0.05 : 0.14), in: RoundedRectangle(cornerRadius: 7))
+                .foregroundStyle(state == .pending || state == .skipped ? Color.secondary : color(state))
+                .strikethrough(state == .skipped)
+                .help(help(stage, state))
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 10)
+    }
+
+    private func title(_ stage: Stage) -> String {
+        if stage == .work, !ticket.subtasks.isEmpty { return "Work \(ticket.tasksDone.count)/\(ticket.subtasks.count)" }
+        return stage.label
+    }
+
+    @ViewBuilder
+    private func icon(_ state: StageState) -> some View {
+        switch state {
+        case .done: Image(systemName: "checkmark")
+        case .active: ProgressView().controlSize(.mini)
+        case .waiting: Image(systemName: "hand.raised")
+        case .paused: Image(systemName: "pause")
+        case .failed: Image(systemName: "exclamationmark.triangle")
+        case .pending, .skipped: Image(systemName: "circle").imageScale(.small)
         }
     }
 
-    private func run(_ ticket: Ticket, _ action: String, _ arguments: [String]) {
-        store.run("\(action) · \(ticket.title.prefix(50))", project: ticket.project, ticketId: ticket.id, arguments)
+    private func color(_ state: StageState) -> Color {
+        switch state {
+        case .done: .green
+        case .active: .blue
+        case .waiting: .orange
+        case .paused: .purple
+        case .failed: .red
+        case .pending, .skipped: .secondary
+        }
     }
 
-    private func markdown(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+    private func help(_ stage: Stage, _ state: StageState) -> String {
+        switch state {
+        case .skipped: "Skipped: this ticket went straight to a worker"
+        case .waiting: "\(stage.label): waiting for you"
+        case .failed: "\(stage.label): stopped or left findings open"
+        default: stage.label
+        }
     }
 }

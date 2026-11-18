@@ -1,0 +1,15 @@
+[
+  {
+    "name": "expense-tracker",
+    "path": "/Users/dev/expense-tracker",
+    "exists": true,
+    "branch": "main",
+    "dirty": false,
+    "last_commit": "1 second ago",
+    "remote_url": "",
+    "conventions": false,
+    "open_tickets": 5,
+    "running": 0,
+    "waiting": 3
+  }
+]

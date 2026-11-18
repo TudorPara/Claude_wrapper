@@ -1,0 +1,187 @@
+{
+  "id": "261118-monthly-report-c3d4",
+  "project": "expense-tracker",
+  "title": "Monthly report endpoint",
+  "status": "pr_open",
+  "route": "planned",
+  "branch": "cw/261118-monthly-report-c3d4",
+  "base_branch": "origin/main",
+  "target_branch": "main",
+  "previous_branch": "main",
+  "base_sha": "0000000000000000000000000000000000000000",
+  "owner": "dev",
+  "toolkit_version": "0.4.0",
+  "created_at": "2026-11-18T06:43:29.921660Z",
+  "updated_at": "2026-11-18T08:43:29.924385Z",
+  "prompts": [
+    {
+      "at": "2026-11-18T06:43:29.921660Z",
+      "text": "Monthly report endpoint",
+      "is_answer": false
+    }
+  ],
+  "questions": [],
+  "split": [],
+  "question_rounds": 0,
+  "qa": [],
+  "asking_worker": "",
+  "planner_session": null,
+  "worker_sessions": {},
+  "worker_seen": {},
+  "last_worker": "",
+  "plan": "- A report service\n- GET /reports/{month}",
+  "options_considered": "",
+  "subtasks": [
+    {
+      "id": "S1",
+      "title": "Add the import table and repository",
+      "worker": "W1",
+      "instructions": "Create the imports table.\nDone when: tests/test_imports.py passes.",
+      "files": [
+        "src/expenses/models/imports.py",
+        "src/expenses/repositories/imports.py"
+      ]
+    },
+    {
+      "id": "S2",
+      "title": "Parse CSV rows into expenses",
+      "worker": "W1",
+      "instructions": "Add the parser.\nDone when: tests/test_parser.py passes.",
+      "files": [
+        "src/expenses/services/csv_parser.py",
+        "tests/test_parser.py"
+      ]
+    }
+  ],
+  "tasks_done": [
+    "S1",
+    "S2"
+  ],
+  "files": [],
+  "context_pack": [],
+  "work_log": [
+    {
+      "at": "2026-11-18T07:53:29.921660Z",
+      "subtask": "S1",
+      "status": "done",
+      "summary": "Added the imports table with a unique file hash.",
+      "worker": "W1",
+      "files": [
+        "src/expenses/models/imports.py",
+        "src/expenses/repositories/imports.py"
+      ],
+      "handoff": "ImportRepository.create(file_hash, user_id) returns the Import.",
+      "project_notes": []
+    },
+    {
+      "at": "2026-11-18T08:13:29.921660Z",
+      "subtask": "S2",
+      "status": "done",
+      "summary": "Parser reads date, amount and category; bad rows are reported, not skipped.",
+      "worker": "W1",
+      "files": [
+        "src/expenses/services/csv_parser.py",
+        "tests/test_parser.py"
+      ],
+      "handoff": "parse_rows(text) -> ParsedImport(rows, errors).",
+      "project_notes": []
+    }
+  ],
+  "reviews": [
+    {
+      "at": "2026-11-18T08:23:29.921660Z",
+      "round": 1,
+      "reviewer": "reviewer",
+      "verdict": "changes",
+      "summary": "One missing test.",
+      "comments": [
+        {
+          "path": "tests/test_reports.py",
+          "line": 1,
+          "severity": "blocking",
+          "body": "No test for a month without expenses.",
+          "id": "F1"
+        }
+      ]
+    },
+    {
+      "at": "2026-11-18T08:33:29.921660Z",
+      "round": 2,
+      "reviewer": "reviewer",
+      "verdict": "changes",
+      "summary": "The test is there; the month boundary is still local time.",
+      "comments": [
+        {
+          "path": "src/expenses/services/reports.py",
+          "line": 42,
+          "severity": "blocking",
+          "body": "Month boundaries use local time; the rules ask for UTC timestamptz.",
+          "id": "F3"
+        },
+        {
+          "path": "src/expenses/api/routes/reports.py",
+          "line": 18,
+          "severity": "minor",
+          "body": "Name the query helper after what it returns.",
+          "id": "F4"
+        }
+      ]
+    }
+  ],
+  "last_reviewed_tree": null,
+  "open_findings": [
+    {
+      "path": "src/expenses/services/reports.py",
+      "line": 42,
+      "severity": "blocking",
+      "body": "Month boundaries use local time; the rules ask for UTC timestamptz.",
+      "id": "F3"
+    }
+  ],
+  "baseline": {},
+  "failing_checks": [],
+  "new_project": false,
+  "posted_review_round": 2,
+  "warnings": [
+    "Review: 1 blocking findings left after the fix round."
+  ],
+  "commit_message": "feat: monthly report",
+  "pushed_at": "2026-11-18T08:34:29.921660Z",
+  "pr_url": "https://github.com/example/expense-tracker/pull/4",
+  "pr_number": 4,
+  "paused_step": null,
+  "error": null,
+  "runs": [
+    {
+      "at": "2026-11-18T08:23:29.921660Z",
+      "role": "reviewer",
+      "agent": "reviewer",
+      "model": "opus",
+      "session_id": "r1",
+      "input_tokens": 19800,
+      "output_tokens": 4620,
+      "cache_read_tokens": 231000,
+      "cache_creation_tokens": 3000,
+      "cost_usd": 0.66,
+      "duration_ms": 99000,
+      "num_turns": 11,
+      "label": "reviewer"
+    },
+    {
+      "at": "2026-11-18T08:33:29.921660Z",
+      "role": "reviewer",
+      "agent": "reviewer",
+      "model": "opus",
+      "session_id": "r2",
+      "input_tokens": 12600,
+      "output_tokens": 2940,
+      "cache_read_tokens": 147000,
+      "cache_creation_tokens": 3000,
+      "cost_usd": 0.41,
+      "duration_ms": 63000,
+      "num_turns": 7,
+      "label": "reviewer"
+    }
+  ],
+  "archived": false
+}

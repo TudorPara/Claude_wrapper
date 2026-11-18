@@ -1,0 +1,42 @@
+[
+  {
+    "check": "binary claude",
+    "status": "ok",
+    "hint": "install claude"
+  },
+  {
+    "check": "binary git",
+    "status": "ok",
+    "hint": "install git"
+  },
+  {
+    "check": "binary uv",
+    "status": "ok",
+    "hint": "install uv"
+  },
+  {
+    "check": "binary gh",
+    "status": "ok",
+    "hint": "brew install gh && gh auth login"
+  },
+  {
+    "check": "toolkit",
+    "status": "ok",
+    "hint": "clone it to /Users/dev/cw/toolkit"
+  },
+  {
+    "check": "project expense-tracker",
+    "status": "ok",
+    "hint": "/Users/dev/expense-tracker"
+  },
+  {
+    "check": "plugin ponytail@ponytail",
+    "status": "ok",
+    "hint": "claude plugin marketplace add DietrichGebert/ponytail && claude plugin install ponytail@ponytail"
+  },
+  {
+    "check": "plugin pyright-lsp@claude-plugins-official",
+    "status": "ok",
+    "hint": "claude plugin marketplace add anthropics/claude-plugins-official && claude plugin install pyright-lsp@claude-plugins-official"
+  }
+]

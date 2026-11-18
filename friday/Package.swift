@@ -9,6 +9,13 @@ let package = Package(
             name: "Friday",
             path: "Sources/Friday",
             swiftSettings: [.swiftLanguageMode(.v5)]
-        )
+        ),
+        .testTarget(
+            name: "FridayTests",
+            dependencies: ["Friday"],
+            path: "Tests/FridayTests",
+            resources: [.copy("Fixtures")],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
     ]
 )

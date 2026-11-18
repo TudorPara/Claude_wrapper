@@ -13,7 +13,6 @@ struct CW {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         let command = ([executable] + arguments).map(shellQuote).joined(separator: " ")
-        // `exec` makes cw replace the shell, so stopping this process stops cw itself (and the agent it runs).
         process.arguments = ["-lc", "exec " + command]
         var environment = ProcessInfo.processInfo.environment
         if !home.isEmpty { environment["CW_HOME"] = (home as NSString).expandingTildeInPath }
@@ -45,7 +44,6 @@ struct CW {
                 }
                 if let stdin { input.fileHandleForWriting.write(stdin) }
                 try? input.fileHandleForWriting.close()
-                // Read while the command runs: a pipe holds about 64 KB, and a command that fills it would wait forever.
                 let data = out.fileHandleForReading.readDataToEndOfFile()
                 let errors = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
                 process.waitUntilExit()
@@ -58,9 +56,9 @@ struct CW {
         }
     }
 
-    func decode<T: Decodable>(_ type: T.Type, _ arguments: [String]) async throws -> T {
+    func decode<T: Decodable>(_ type: T.Type, _ arguments: [String], decoder: JSONDecoder = JSONDecoder()) async throws -> T {
         let data = try await output(arguments)
-        return try JSONDecoder().decode(T.self, from: data)
+        return try decoder.decode(T.self, from: data)
     }
 
     /// Starts a long command and streams its combined output line by line.

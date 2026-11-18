@@ -1,6 +1,5 @@
 import Foundation
 
-// Mirrors cw's config.json exactly: FRIDAY reads it with `cw config --json` and saves it with `cw config set`.
 
 struct RoleModels: Codable, Equatable {
     var planner: String
@@ -196,9 +195,7 @@ enum AgentRole: String, CaseIterable, Identifiable {
     var label: String { rawValue.capitalized }
 }
 
-// Tickets, as printed by `cw status --json` and `cw show <id> --json`.
-
-enum TicketStatus: String, Codable {
+enum TicketStatus: String, Codable, CaseIterable {
     case needsInput = "needs_input"
     case awaitingApproval = "awaiting_approval"
     case inProgress = "in_progress"
@@ -225,10 +222,17 @@ enum TicketStatus: String, Codable {
         }
     }
 
-    var needsYou: Bool { [.needsInput, .awaitingApproval, .blocked, .paused, .ready].contains(self) }
+    var isClosed: Bool { self == .done || self == .abandoned }
 }
 
-struct TicketSummary: Codable, Identifiable, Hashable {
+/// Decodes the ticket side of cw's JSON, whose keys are snake_case.
+let snakeCaseDecoder: JSONDecoder = {
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    return decoder
+}()
+
+struct TicketSummary: Decodable, Identifiable, Hashable {
     var id: String
     var project: String
     var title: String
@@ -240,48 +244,59 @@ struct TicketSummary: Codable, Identifiable, Hashable {
     var running: Bool
     var archived: Bool
     var error: String?
-
-    enum CodingKeys: String, CodingKey {
-        case id, project, title, status, route, branch, running, archived, error
-        case prUrl = "pr_url"
-        case updatedAt = "updated_at"
-    }
 }
 
-struct ContextAnchor: Codable, Hashable {
+struct ContextAnchor: Decodable, Hashable {
     var path: String
-    var lines: String?
-    var reason: String?
+    var lines: String
+    var reason: String
 }
 
-struct PromptEntry: Codable, Hashable { var at: String; var text: String }
+struct PromptEntry: Decodable, Hashable {
+    var at: String
+    var text: String
+    var isAnswer: Bool
+}
 
-struct Subtask: Codable, Hashable {
+struct QuestionEntry: Decodable, Hashable {
+    var at: String
+    var worker: String
+    var task: String?
+    var question: String
+    var answer: String
+    var answeredBy: String
+}
+
+struct Subtask: Decodable, Hashable, Identifiable {
     var id: String
     var title: String
-    var worker: String?
+    var worker: String
     var instructions: String
     var files: [String]
 }
 
-struct WorkEntry: Codable, Hashable {
+struct WorkEntry: Decodable, Hashable {
     var at: String
     var subtask: String?
     var status: String
     var summary: String
-    var worker: String?
-    var files: [String]?
-    var handoff: String?
+    var worker: String
+    var files: [String]
+    var handoff: String
+    var projectNotes: [String]
 }
 
-struct ReviewComment: Codable, Hashable {
+struct ReviewComment: Decodable, Hashable {
     var path: String
     var line: Int
     var severity: String
     var body: String
+    var id: String
+
+    var isBlocking: Bool { severity == "blocking" }
 }
 
-struct ReviewEntry: Codable, Hashable {
+struct ReviewEntry: Decodable, Hashable {
     var at: String
     var round: Int
     var reviewer: String
@@ -290,11 +305,12 @@ struct ReviewEntry: Codable, Hashable {
     var comments: [ReviewComment]
 }
 
-struct RunUsage: Codable, Hashable {
+struct RunUsage: Decodable, Hashable {
     var at: String
     var role: String
     var agent: String
     var model: String
+    var sessionId: String
     var inputTokens: Int
     var outputTokens: Int
     var cacheReadTokens: Int
@@ -302,20 +318,11 @@ struct RunUsage: Codable, Hashable {
     var costUsd: Double
     var durationMs: Int
     var numTurns: Int
-
-    enum CodingKeys: String, CodingKey {
-        case at, role, agent, model
-        case inputTokens = "input_tokens"
-        case outputTokens = "output_tokens"
-        case cacheReadTokens = "cache_read_tokens"
-        case cacheCreationTokens = "cache_creation_tokens"
-        case costUsd = "cost_usd"
-        case durationMs = "duration_ms"
-        case numTurns = "num_turns"
-    }
+    var label: String
 }
 
-struct Ticket: Codable, Identifiable {
+/// One ticket as `cw show <id> --json` prints it.
+struct Ticket: Decodable, Identifiable, Hashable {
     var id: String
     var project: String
     var title: String
@@ -323,41 +330,67 @@ struct Ticket: Codable, Identifiable {
     var route: String
     var branch: String
     var baseBranch: String
-    var previousBranch: String?
-    var tasksDone: [String]?
+    var targetBranch: String
+    var previousBranch: String
     var owner: String
+    var toolkitVersion: String
+    var createdAt: String
+    var updatedAt: String
     var prompts: [PromptEntry]
     var questions: [String]
+    var split: [String]
+    var qa: [QuestionEntry]
+    var askingWorker: String
+    var plannerSession: String?
+    var workerSessions: [String: String]
+    var lastWorker: String
     var plan: String
     var optionsConsidered: String
     var subtasks: [Subtask]
-    var contextPack: [ContextAnchor]?
+    var tasksDone: [String]
+    var files: [String]
+    var contextPack: [ContextAnchor]
     var workLog: [WorkEntry]
     var reviews: [ReviewEntry]
+    var openFindings: [ReviewComment]
+    var failingChecks: [String]
+    var newProject: Bool
+    var warnings: [String]
+    var commitMessage: String
+    var pushedAt: String?
     var prUrl: String?
+    var prNumber: Int?
+    var pausedStep: String?
     var error: String?
     var runs: [RunUsage]
-    var archived: Bool?
-    var warnings: [String]?
-    var split: [String]?
-    var pushedAt: String?
-
-    enum CodingKeys: String, CodingKey {
-        case id, project, title, status, route, branch, owner, prompts, questions, plan, subtasks, reviews,
-            error, runs, archived
-        case contextPack = "context_pack"
-        case baseBranch = "base_branch"
-        case previousBranch = "previous_branch"
-        case tasksDone = "tasks_done"
-        case optionsConsidered = "options_considered"
-        case workLog = "work_log"
-        case prUrl = "pr_url"
-        case warnings, split
-        case pushedAt = "pushed_at"
-    }
+    var archived: Bool
 }
 
-// The toolkit inventory from `cw toolkit --json`.
+/// One line of `cw events <id> --json`: an agent's start, tool call, end or failure, or a check cw ran.
+struct AgentEvent: Decodable, Hashable {
+    var at: String
+    var kind: String
+    var agent: String?
+    var role: String?
+    var label: String?
+    var model: String?
+    var tool: String?
+    var detail: String?
+    var turns: Int?
+    var costUsd: Double?
+    var message: String?
+    var command: String?
+    var passed: Bool?
+}
+
+/// One row of `cw doctor --json`.
+struct DoctorRow: Decodable, Hashable, Identifiable {
+    var check: String
+    var status: String
+    var hint: String
+    var id: String { check }
+    var isOK: Bool { status == "ok" }
+}
 
 struct AgentDefinition: Codable, Identifiable, Hashable {
     var name: String

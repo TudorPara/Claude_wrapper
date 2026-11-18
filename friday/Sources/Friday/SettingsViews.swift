@@ -152,21 +152,13 @@ struct ProjectSettingsView: View {
 
 /// Chat, voice and look. Saved at once on this Mac; not part of cw's config.
 struct ChatPreferencesCard: View {
-    @AppStorage(Preference.chatTextSize) private var textSize = Preference.defaultChatTextSize
-    @AppStorage(Preference.liveOutputLines) private var liveLines = Preference.defaultLiveOutputLines
     @AppStorage(Preference.planFirstByDefault) private var planFirst = false
     @AppStorage(Preference.speakReplies) private var speakReplies = false
     @AppStorage(Preference.voiceLanguage) private var voiceLanguage = Preference.defaultVoiceLanguage
     @AppStorage(Preference.accent) private var accent = Preference.defaultAccent
 
     var body: some View {
-        Card(title: "Chat, voice and look", systemImage: "bubble.left.and.bubble.right") {
-            HStack {
-                Text("Chat text size")
-                Slider(value: $textSize, in: 11...18, step: 1).frame(maxWidth: 220)
-                Text("\(Int(textSize)) pt").font(.caption).foregroundStyle(.secondary)
-            }
-            Stepper("Live output lines shown in the chat: \(liveLines)", value: $liveLines, in: 1...20)
+        Card(title: "Voice and look", systemImage: "waveform") {
             Toggle("Plan first by default for new tickets", isOn: $planFirst)
             Toggle("Speak replies: FRIDAY says where a ticket stands when a step ends", isOn: $speakReplies)
             HStack {
@@ -201,6 +193,7 @@ struct SettingsView: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(draft == nil || draft == store.config)
                 }
+                DoctorCard()
                 Card(title: "This Mac", systemImage: "desktopcomputer") {
                     TextField("cw executable", text: $store.cwExecutable)
                     TextField("CW_HOME (empty = ~/.cw)", text: $store.cwHome)

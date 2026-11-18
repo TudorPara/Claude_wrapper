@@ -1,101 +1,162 @@
 import SwiftUI
 
-/// Per-Mac preferences for the chat, the voice and the look. They live in UserDefaults, not in cw's config.
+/// Per-Mac preferences for new tickets, the voice and the look. They live in UserDefaults, not in cw's config.
 enum Preference {
-    static let chatTextSize = "chatTextSize"
-    static let liveOutputLines = "liveOutputLines"
     static let planFirstByDefault = "planFirstByDefault"
     static let speakReplies = "speakReplies"
     static let voiceLanguage = "voiceLanguage"
     static let accent = "accent"
 
-    static let defaultChatTextSize = 13.0
-    static let defaultLiveOutputLines = 4
     static let defaultVoiceLanguage = "en-US"
-    static let defaultAccent = "cyan"
+    static let defaultAccent = "blue"
+}
+
+private struct SnapshotKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// True while `--snapshot` draws the window offscreen, where translucent sidebar and inspector panes do not draw.
+    var isSnapshot: Bool {
+        get { self[SnapshotKey.self] }
+        set { self[SnapshotKey.self] = newValue }
+    }
 }
 
 enum Theme {
     static let accents: [String: Color] = [
-        "cyan": Color(red: 0.25, green: 0.78, blue: 0.95),
-        "green": Color(red: 0.35, green: 0.84, blue: 0.52),
-        "orange": Color(red: 0.98, green: 0.62, blue: 0.20),
-        "purple": Color(red: 0.70, green: 0.55, blue: 0.98),
+        "blue": .blue,
+        "cyan": .cyan,
+        "green": .green,
+        "orange": .orange,
+        "purple": .purple,
     ]
     static var accent: Color {
         let chosen = UserDefaults.standard.string(forKey: Preference.accent) ?? Preference.defaultAccent
-        return accents[chosen] ?? Color(red: 0.25, green: 0.78, blue: 0.95)
+        return accents[chosen] ?? .blue
     }
-    static let background = Color(red: 0.04, green: 0.05, blue: 0.07)
-    static let panel = Color(red: 0.07, green: 0.08, blue: 0.11)
-    static let editor = Color(red: 0.09, green: 0.10, blue: 0.13)
-    static let card = Color.primary.opacity(0.04)
-    static let border = Color.primary.opacity(0.08)
+    static let card = Color.primary.opacity(0.035)
+    static let border = Color.primary.opacity(0.09)
 
     static func color(for status: TicketStatus) -> Color {
         switch status {
         case .needsInput, .awaitingApproval: .orange
-        case .inProgress, .inReview: accent
-        case .ready: .yellow
+        case .inProgress, .inReview: .blue
+        case .ready: .teal
         case .blocked: .red
         case .paused: .purple
         case .prOpen: .green
-        case .done: .gray
-        case .abandoned: .gray.opacity(0.6)
+        case .done, .abandoned: .secondary
+        }
+    }
+
+    static func color(for role: AgentRole) -> Color {
+        switch role {
+        case .planner: .purple
+        case .worker: .blue
+        case .reviewer: .orange
+        case .onboarder: .teal
+        }
+    }
+
+    static func symbol(for role: AgentRole) -> String {
+        switch role {
+        case .planner: "map"
+        case .worker: "hammer"
+        case .reviewer: "eye"
+        case .onboarder: "binoculars"
+        }
+    }
+
+    static func symbol(for status: TicketStatus) -> String {
+        switch status {
+        case .needsInput: "questionmark.bubble"
+        case .awaitingApproval: "checkmark.seal"
+        case .inProgress, .inReview: "gearshape.2"
+        case .ready: "tray.full"
+        case .blocked: "exclamationmark.octagon"
+        case .paused: "pause.circle"
+        case .prOpen: "arrow.triangle.pull"
+        case .done: "checkmark.circle"
+        case .abandoned: "xmark.circle"
         }
     }
 }
 
-struct StatusChip: View {
+struct StatusBadge: View {
     var status: TicketStatus
     var running = false
 
     var body: some View {
-        HStack(spacing: 4) {
-            if running { ProgressView().controlSize(.mini) }
-            Text(status.label)
+        Label {
+            Text(running ? "Running" : status.label)
+        } icon: {
+            if running { ProgressView().controlSize(.mini) } else { Image(systemName: Theme.symbol(for: status)) }
         }
-        .font(.caption.weight(.semibold))
+        .font(.caption.weight(.medium))
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
-        .background(Theme.color(for: status).opacity(0.18), in: Capsule())
-        .foregroundStyle(Theme.color(for: status))
+        .background((running ? Color.blue : Theme.color(for: status)).opacity(0.14), in: Capsule())
+        .foregroundStyle(running ? Color.blue : Theme.color(for: status))
     }
 }
 
-/// The pipeline chips: where a ticket is between plan and done.
-struct PipelineView: View {
-    var status: TicketStatus
-    var route: String
-
-    private let stages = ["Plan", "Approve", "Work", "Review", "PR", "Done"]
-
-    private var current: Int {
-        switch status {
-        case .needsInput: 0
-        case .awaitingApproval: 1
-        case .inProgress, .blocked, .paused: 2
-        case .ready, .inReview: 3
-        case .prOpen: 4
-        case .done, .abandoned: 5
-        }
-    }
+struct Pill: View {
+    var text: String
+    var color: Color = .secondary
 
     var body: some View {
-        HStack(spacing: 6) {
-            ForEach(Array(stages.enumerated()), id: \.offset) { index, stage in
-                let skipped = route == "direct" && index < 2
-                let style: Color = index < current ? .green : index == current ? Theme.color(for: status) : .secondary
-                Text(stage)
-                    .font(.caption.weight(index == current ? .bold : .regular))
-                    .strikethrough(skipped)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(style.opacity(index <= current && !skipped ? 0.16 : 0.05), in: Capsule())
-                    .overlay(Capsule().stroke(style.opacity(index == current ? 0.8 : 0.2)))
-                    .foregroundStyle(skipped ? .secondary : style)
-                    .help(skipped ? "Skipped: this ticket went straight to a worker" : stage)
-            }
+        Text(text)
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.13), in: Capsule())
+            .foregroundStyle(color)
+    }
+}
+
+struct MetricTile: View {
+    var title: String
+    var value: String
+    var systemImage: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(title, systemImage: systemImage).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.title2.weight(.semibold)).monospacedDigit()
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+/// Text written in markdown by an agent: a plan, a summary, a review.
+struct MarkdownText: View {
+    var text: String
+
+    var body: some View {
+        Text(attributed).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var attributed: AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        let bulleted = text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.hasPrefix("- ") ? "• " + $0.dropFirst(2) : String($0) }
+            .joined(separator: "\n")
+        return (try? AttributedString(markdown: bulleted, options: options)) ?? AttributedString(bulleted)
+    }
+}
+
+/// "3 minutes ago" from one of cw's timestamps.
+struct RelativeTime: View {
+    var timestamp: String
+
+    var body: some View {
+        if let date = parseDate(timestamp) {
+            Text(date, format: .relative(presentation: .named))
+        } else {
+            Text(timestamp.shortTimestamp)
         }
     }
 }
@@ -204,15 +265,5 @@ extension String {
     var shortTimestamp: String {
         let cleaned = replacingOccurrences(of: "T", with: " ")
         return String(cleaned.prefix(16))
-    }
-}
-
-extension Int {
-    var compact: String {
-        switch self {
-        case 1_000_000...: String(format: "%.1fM", Double(self) / 1_000_000)
-        case 1_000...: String(format: "%.1fk", Double(self) / 1_000)
-        default: "\(self)"
-        }
     }
 }
