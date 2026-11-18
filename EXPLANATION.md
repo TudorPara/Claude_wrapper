@@ -87,6 +87,8 @@ you: prompt (terminal, FRIDAY or voice)        cw new <name> "<idea>" also creat
                                        S1 (W1) ─► S2 (W1, same session) ─► S3 (W2, new session) ─► S4 (W1) …
                                        a worker's question ─► planner answers ─► or you do
                                        after every task: checks ─ broke? ─► one fix round by that worker
+                                                         ─ still broken? ─► back-off: a fresh session of that worker,
+                                                                            started from its reflection, + one fix round
                                                          ─ still broken? ─► the ticket stops (BLOCKED)
  │
  ▼
@@ -130,6 +132,15 @@ you: cw merge → refused while CI has not passed or a blocking finding is open 
 - **A planner that keeps asking still has to plan.** When it asks again after its last question round, cw tells it once to plan with stated assumptions; if it still returns no plan, the ticket waits for your reply. An empty plan never reaches approval.
 - **`cw split` runs no agent.** It creates one ticket per change, each paused before its plan with the original's previous branch, and abandons the original only once they all exist. Start each with `cw resume <ticket>`, which runs its planner.
 - **Project notes are capped.** A worker's `project_notes` is usually empty (at most two lines a run), and a ticket adds at most five to `CLAUDE.md`.
+- **The review cannot be skipped.** `cw pr` always reviews first and then opens the PR. Findings left after the fix round are on the PR and on the ticket; you decide what to do with them. `cw review` runs the same review alone. The reviewer is told that the "Notes kept by cw" section of `CLAUDE.md` ships on purpose, whenever the diff contains it.
+- **PR comments are worked off with `cw fix`.** It reads the open (unresolved) comment threads on lines of the PR, from the reviewer agent and from people, gives them to the last worker in one instruction, then runs the same steps as `cw pr`: checks, review, a new commit, push. It posts the worker's summary on the PR, which says why a comment needed no change, and resolves the threads it sent. Comments in the PR's general conversation are not read. The new review can leave new comments, so `cw fix` goes round again until none are left, at most `max_pull_request_fix_rounds` times (3). A round in which the worker changed nothing ends it, and comments still open afterwards get a `Pull request:` warning.
+- **`cw merge` squash-merges, and only when it is safe.** It refuses while the PR's CI has not passed (a PR without checks passes), while cw's last review left a blocking finding, or while the checkout has uncommitted changes on the ticket's branch. Then it squash-merges on the host with the ticket's commit message, deletes the branch there, fast-forwards your local base branch to the host's (a warning if it has diverged), deletes the local branch, and closes the ticket like `cw done`.
+- **A task whose checks still fail after its fix round backs off once.** The worker's last fix answer holds a `reflection` (what it tried, why it may still fail, what to try next). cw drops that worker's session and starts a fresh one with the task, the reflection and the failing output, without the failed attempt's history; this is ReAct's "switch method instead of adding steps" plus Reflexion's written lesson, and dropping the old tool outputs is what *The Complexity Trap* found halves cost. `max_backoff_rounds` (1) caps it.
+- **A task whose checks still fail after the back-off stops the ticket** instead of letting the next task build on untested code. The cause is often outside the code (a missing setting, a database that is not running), and the worker's summary says so. Fix it and run `cw resume`: the task runs again, then the checks.
+- **cw starts the project's containers.** When a project has a `compose_file` and the file exists, cw runs `docker compose --file <file> up --detach --wait` before every worker run and every check, because workers may run only the lint and test commands. It returns at once when the containers already run. A failure (Docker not running, a port already taken) stops the ticket with Docker's reason. `cw new` sets `compose_file` to `dev/docker-compose.yml`, and the planner's skeleton task writes that file, with a healthcheck per service.
+- **A new project's agents write its `.env`.** `cw new` leaves `.env` off the project's protected paths, so the skeleton task writes working local development values (random values for local secrets, never real ones) next to `.env.example`. `.env` is gitignored, so it never reaches the repository; the tests use their own database.
+- **Every repeat is capped** by config: fix rounds, back-off rounds, review rounds, question rounds and conflict rounds default to 1, PR fix rounds to 3, every agent has a turn cap and a time limit. Nothing loops by itself.
+- **A stop is never final.** Ctrl+C, FRIDAY's Stop, an error, a time limit or the usage limit leave the ticket blocked or paused with the step recorded; `cw resume` continues, and a task list continues at the first unfinished task.
 
 ---
 
@@ -414,6 +425,7 @@ Polling: the ticket list every 3 seconds, the open ticket and its events every 2
 - Yao et al., *ReAct* ([arXiv:2210.03629](https://arxiv.org/abs/2210.03629)): the reason → act → observe loop inside every agent run.
 - Madaan et al., *Self-Refine* ([arXiv:2303.17651](https://arxiv.org/abs/2303.17651)) and Shinn et al., *Reflexion* ([arXiv:2303.11366](https://arxiv.org/abs/2303.11366)): feedback loops, the idea behind the reviewer → worker fix round, and why it's capped.
 - Jimenez et al., *SWE-bench* ([arXiv:2310.06770](https://arxiv.org/abs/2310.06770)) and Yang et al., *SWE-agent* ([arXiv:2405.15793](https://arxiv.org/abs/2405.15793)): how coding agents are evaluated.
+- Lindenbauer et al., *The Complexity Trap* ([arXiv:2508.21433](https://arxiv.org/abs/2508.21433)): dropping old tool outputs roughly halves an agent's cost and solves as many tasks as LLM summarization; the reason the back-off starts a fresh session.
 - Liu et al., *Lost in the Middle* ([arXiv:2307.03172](https://arxiv.org/abs/2307.03172)): long contexts are used less reliably, another reason for small hand-offs.
 
 **Reference docs**

@@ -152,6 +152,17 @@ def fix_checks_instruction(failures: list[tuple[str, str]]) -> str:
     )
 
 
+def backoff_instruction(task: Subtask, reflection: str, failures: list[tuple[str, str]]) -> str:
+    """Return the instruction for a fresh worker session taking over a task whose checks still fail."""
+    return _join(
+        task_instruction(task),
+        "## A previous attempt failed\n\nThe task's code is already in the files, but the checks below still fail "
+        "after a fix round. Start from the lesson below, not from the previous approach.",
+        f"Lesson from the previous attempt:\n{reflection}" if reflection else "",
+        fix_checks_instruction(failures),
+    )
+
+
 def fix_review_instruction(comments: list[ReviewComment]) -> str:
     """Return the instruction to address every review finding, minor ones included: the reviewer checks them all."""
     findings = "\n".join(

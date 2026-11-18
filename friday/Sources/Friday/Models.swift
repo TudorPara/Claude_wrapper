@@ -67,6 +67,7 @@ struct Limits: Codable, Equatable {
     var checkTimeoutMinutes: Int?
     var maxWorkers: Int?
     var maxPullRequestFixRounds: Int?
+    var maxBackoffRounds: Int?
 
     enum CodingKeys: String, CodingKey {
         case maxReviewRounds = "max_review_rounds"
@@ -82,6 +83,7 @@ struct Limits: Codable, Equatable {
         case checkTimeoutMinutes = "check_timeout_minutes"
         case maxWorkers = "max_workers"
         case maxPullRequestFixRounds = "max_pull_request_fix_rounds"
+        case maxBackoffRounds = "max_backoff_rounds"
     }
 }
 
