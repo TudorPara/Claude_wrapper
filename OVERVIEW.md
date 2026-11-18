@@ -8,7 +8,7 @@ A small team workflow around Claude Code. A developer describes a change in one 
 |---|---|
 | **Toolkit** | The team's shared agents, coding rules and safety hooks, packaged as a Claude Code plugin. Every agent follows the same rules on every project. |
 | **cw** | A command-line tool that runs the agents on a "ticket" and does all the git work. |
-| **FRIDAY** | A macOS app over cw: the same flow with buttons and chat instead of commands. |
+| **FRIDAY** | A macOS app over cw: every project, ticket and agent (planner, workers, reviewer) on screen, with the same commands as buttons. |
 
 There is no server, database or custom agent framework. Claude Code does the agent work; cw only decides which agent runs, with what context, and what happens next.
 
@@ -25,11 +25,11 @@ cw run <project> "<request>" [--plan]
    │
 cw pr
    ├─ reviewer (always) ── checks the diff against the team rules
-   │       findings go back to the worker for one fix round
+   │       blocking findings go back to the worker, up to two fix rounds
    ├─ cw commits once, pushes and opens the pull request with the review on it
    │
-cw fix      the worker addresses the PR's comments (the reviewer's and colleagues'), round after round
-            until the new review leaves none (at most 3 rounds)
+cw fix      the worker addresses the PR's comments (the reviewer's and colleagues') and the open
+            blocking findings, round after round while blocking findings stay open (at most 3)
 cw merge    squash-merges, only once CI has passed and no blocking finding is left
 ```
 
@@ -58,16 +58,16 @@ Every loop has a limit in the config, so a ticket can't run away in time or cost
 
 | Limit | Default |
 |---|---|
-| Fix rounds after the review asks for changes | 1, then one re-review |
-| `cw fix` rounds while the PR still has comments | 3 |
+| Fix rounds after the review leaves blocking findings | 2, each followed by a re-review of the new diff |
+| `cw fix` rounds while blocking findings stay open | 3 |
 | A task's checks still failing after its fix round | the ticket stops |
-| Fix rounds for checks the ticket broke | 1 |
+| Fix rounds for checks the ticket broke | 2 |
 | Merge-conflict rounds | 1 |
 | Question rounds per instruction | 1 (after that the worker picks the simplest option and says what it assumed) |
 | Workers per ticket | 4, taking turns, never in parallel |
 | Files before a no-plan ticket must be planned | 5 |
 | Files per task (planner rule) | about 8 |
-| Turns per run | planner 40 · worker 40 · reviewer 30 |
+| Turns per run | planner 40 · worker 70 · reviewer 30 |
 | Time per agent run · per check | 45 min · 15 min |
 | Worker session size before a fresh start | 45k tokens per turn |
 | Diff sent to the reviewer | 60,000 characters |

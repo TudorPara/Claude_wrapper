@@ -11,7 +11,7 @@ from pathlib import Path
 from cw import onboarding, pipeline, repo_map, reports
 from cw.config import GitHostProvider, config_path, get_settings, repo_map_path, validate_config, write_settings
 from cw.errors import AppException
-from cw.tickets import CLOSED_STATUSES, find_ticket, list_tickets, looks_like_ticket_id, ticket_markdown
+from cw.tickets import CLOSED_STATUSES, find_ticket, list_tickets, looks_like_ticket_id, read_events, ticket_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,7 @@ LOG_DATE_FORMAT = "%H:%M:%S"
 FAILURE_EXIT_CODE = 1
 STOPPED_EXIT_CODE = 130
 GITHUB_VISIBILITIES = ("private", "public")
+DEFAULT_EVENTS_SHOWN = 300
 
 
 def _print_json(payload: object) -> None:
@@ -139,6 +140,17 @@ def _show(arguments: argparse.Namespace) -> None:
     print(ticket_markdown(ticket))
 
 
+def _events(arguments: argparse.Namespace) -> None:
+    """Show the ticket's latest agent events: starts, tool calls, ends, failures and checks."""
+    ticket = find_ticket(arguments.ticket)
+    events = read_events(ticket.project, ticket.id, arguments.last)
+    if arguments.json:
+        _print_json(events)
+        return
+    for event in events:
+        print(" ".join(str(value) for key, value in event.items() if key != "role"))
+
+
 def _config(arguments: argparse.Namespace) -> None:
     """Print the config, or replace it with validated JSON from stdin."""
     if arguments.config_command == "set":
@@ -151,9 +163,13 @@ def _config(arguments: argparse.Namespace) -> None:
     _print_json(get_settings().model_dump(mode="json", exclude={"bitbucket"}))
 
 
-def _doctor(_: argparse.Namespace) -> None:
+def _doctor(arguments: argparse.Namespace) -> None:
     """Check the environment."""
-    for check, status, hint in reports.build_doctor_report(get_settings()):
+    report = reports.build_doctor_report(get_settings())
+    if arguments.json:
+        _print_json([{"check": check, "status": status, "hint": hint} for check, status, hint in report])
+        return
+    for check, status, hint in report:
         print(f"{status:<8} {check:<50} {'' if status == reports.OK else hint}")
 
 
@@ -245,6 +261,12 @@ def _parser() -> argparse.ArgumentParser:
     show.add_argument("--json", action="store_true")
     show.set_defaults(handler=_show)
 
+    events = commands.add_parser("events", help="a ticket's latest agent events, for following it live")
+    events.add_argument("ticket")
+    events.add_argument("--last", type=int, default=DEFAULT_EVENTS_SHOWN, help="how many of the latest events")
+    events.add_argument("--json", action="store_true")
+    events.set_defaults(handler=_events)
+
     stats = commands.add_parser("stats", help="token usage per project and role")
     stats.add_argument("--json", action="store_true")
     stats.set_defaults(
@@ -264,7 +286,9 @@ def _parser() -> argparse.ArgumentParser:
     config.add_argument("--json", action="store_true")
     config.set_defaults(handler=_config)
 
-    commands.add_parser("doctor", help="check binaries, tokens, toolkit and plugins").set_defaults(handler=_doctor)
+    doctor = commands.add_parser("doctor", help="check binaries, tokens, toolkit and plugins")
+    doctor.add_argument("--json", action="store_true")
+    doctor.set_defaults(handler=_doctor)
     return parser
 
 

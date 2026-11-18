@@ -8,6 +8,7 @@ from conftest import TOOLKIT
 
 GUARD = TOOLKIT / "plugins" / "core" / "scripts" / "guard.py"
 RULES = TOOLKIT / "plugins" / "python" / "scripts" / "rules_on_touch.py"
+RUFF_HOOK = TOOLKIT / "plugins" / "python" / "scripts" / "ruff_on_edit.py"
 TOPICS = TOOLKIT / "plugins" / "python" / "skills" / "python-rules" / "topics"
 PROTECTED = json.dumps([".env*", "**/*.key", "**/*.pem", "**/secrets/**"])
 
@@ -77,3 +78,25 @@ def test_every_topic_in_the_index_has_its_file() -> None:
     index = json.loads((TOPICS / "topics.json").read_text())
     for topic in [*index["topics"], *index["always"], *index["new_project"], *index["review"]]:
         assert (TOPICS / f"{topic}.md").exists(), topic
+
+
+def test_the_ruff_hook_keeps_an_import_the_next_edit_will_use_and_says_when_it_changed_the_file(
+    tmp_path: Path,
+) -> None:
+    def git(*arguments: str) -> None:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *arguments], cwd=tmp_path, check=True)
+
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    (tmp_path / ".venv" / "bin" / "ruff").symlink_to(Path(sys.executable).parent / "ruff")
+    (tmp_path / ".gitignore").write_text(".venv\n")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\nversion = "0"\n')
+    app = tmp_path / "app.py"
+    app.write_text("def f():\n    return 1\n")
+    git("init", "-q")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    app.write_text("import json\ndef f():\n  return 1\n")
+    payload = json.dumps({"tool_input": {"file_path": str(app)}})
+    hook = subprocess.run([sys.executable, str(RUFF_HOOK)], input=payload, text=True, capture_output=True)
+    assert hook.returncode == 0 and app.read_text().startswith("import json\n")
+    assert "read it again" in json.loads(hook.stdout)["hookSpecificOutput"]["additionalContext"]

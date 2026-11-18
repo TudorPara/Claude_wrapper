@@ -11,6 +11,12 @@ from cw.models import QuestionEntry, ReviewComment, ReviewEntry, Subtask, Ticket
 from cw.project_memory import NOTES_HEADING
 from cw.tickets import ticket_markdown, work_record
 
+PLAN_NOW = (
+    "You may not ask more questions. Write the plan now: make reasonable assumptions and list them at the top of "
+    "the plan."
+)
+NO_PLAN = "The planner returned no plan. Reply with more detail about what you want, and it plans again."
+
 
 def _join(*sections: str) -> str:
     """Join the non-empty sections."""
@@ -157,15 +163,18 @@ def fix_review_instruction(comments: list[ReviewComment]) -> str:
     )
 
 
-def pull_request_comments_instruction(threads: list[PullRequestThread]) -> str:
-    """Return the instruction to address the open comments on the pull request, from the reviewer and from people."""
-    findings = "\n".join(
+def pull_request_comments_instruction(threads: list[PullRequestThread], findings: list[ReviewComment]) -> str:
+    """Return the instruction to address the pull request's open comments and the review's open blocking findings."""
+    comments = "\n".join(
         f"- `{thread.path}:{thread.line}`\n  {thread.body.replace(chr(10), chr(10) + '  ')}" for thread in threads
     )
-    return (
-        "## Address these pull request comments\n\nThe reviewer agent and people left these on the pull request. "
-        f"Address every one.\n\n{findings}\n\nWhere a comment needs no change, say why in `summary`, one line per "
-        "comment: cw posts your summary on the pull request. Decide yourself: questions are not possible here."
+    blocking = "\n".join(f"- `{finding.path}:{finding.line}` {finding.body}" for finding in findings)
+    return _join(
+        "## Address these pull request comments\n\nAddress every comment and finding below.",
+        f"Comments on the pull request, from the reviewer agent and from people:\n\n{comments}" if comments else "",
+        f"Blocking findings of the last review, still open:\n\n{blocking}" if blocking else "",
+        "Where a comment needs no change, say why in `summary`, one line per comment: cw posts your summary on the "
+        "pull request. Decide yourself: questions are not possible here.",
     )
 
 
@@ -264,7 +273,9 @@ def planner_answer_prompt(ticket: Ticket, worker: str, task: str | None, questio
     )
 
 
-def reviewer_prompt(project: Project, ticket: Ticket, diff: str, truncated: bool, previous: list[ReviewEntry]) -> str:
+def reviewer_prompt(
+    project: Project, ticket: Ticket, diff: str, truncated: bool, open_findings: list[ReviewComment]
+) -> str:
     """Return a reviewer task for a diff."""
     note = "\n\nThe diff was cut to fit; read the changed files for the rest." if truncated else ""
     notes = [line for entry in ticket.work_log for line in work_record(entry)]
@@ -274,11 +285,15 @@ def reviewer_prompt(project: Project, ticket: Ticket, diff: str, truncated: bool
         else ""
     )
     earlier = ""
-    if previous:
+    if open_findings:
         findings = "\n".join(
-            f"- `{comment.path}:{comment.line}` {comment.body}" for entry in previous for comment in entry.comments
+            f"- {finding.id} `{finding.path}:{finding.line}` {finding.body}" for finding in open_findings
         )
-        earlier = f"## Your previous findings (check each is fixed)\n\n{findings}"
+        earlier = (
+            "## Blocking findings still open from earlier reviews\n\n"
+            f"{findings}\n\nPut the id of each one the code now fixes in `resolved`. Do not repeat these as new "
+            "comments: one that is not fixed stays open by itself."
+        )
     memory = (
         f"## cw's project notes\n\nThe section `{NOTES_HEADING}` in CLAUDE.md is written by cw from the workers' "
         "`project_notes` and ships with every change on purpose. It is not outside the task: flag a note only if "

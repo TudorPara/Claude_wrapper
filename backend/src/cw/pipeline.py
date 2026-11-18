@@ -18,6 +18,7 @@ from cw.models import (
     PlannerResult,
     PromptEntry,
     QuestionEntry,
+    ReviewComment,
     ReviewEntry,
     ReviewerResult,
     Route,
@@ -35,6 +36,7 @@ from cw.models import (
 from cw.process import run_process
 from cw.tickets import (
     CLOSED_STATUSES,
+    append_event,
     find_ticket,
     is_running,
     list_tickets,
@@ -59,12 +61,14 @@ SCOPE_WARNING = "Scope:"
 EMPTY_WARNING = "No changes:"
 MEMORY_WARNING = "Memory:"
 MEMORY_MAX_NOTES = 40
+TICKET_MAX_NOTES = 5
+FINDING_PREFIX = "F"
+CHECK_EVENT = "check"
 OTHER_WORK = "follow-up"
 ARTIFACTS_SHOWN = 5
 REVIEW_WARNING = "Review:"
 FETCH_WARNING = "Fetch:"
 LOCAL_WARNING = "Local:"
-PULL_REQUEST_WARNING = "Pull request:"
 DOCKER_COMPOSE = ("docker", "compose", "--file")
 COMPOSE_UP = ("up", "--detach", "--wait")
 USER = "user"
@@ -126,10 +130,15 @@ def _stop(ticket: Ticket, step: Step, status: TicketStatus, reason: str) -> None
 
 
 def _guarded(project: Project, ticket: Ticket, step: Step, action: Callable[[], None]) -> None:
-    """Run a step on the ticket's branch; whatever stops it, leave the ticket paused or blocked and resumable."""
+    """Run a step on the ticket's branch; whatever stops it, leave the ticket paused or blocked and resumable.
+
+    The step is recorded before it runs, so a process killed without a chance to clean up resumes the same step.
+    """
     try:
         with project_lock(project.name, ticket.id):
             _enter(project, ticket)
+            ticket.paused_step = step
+            write_ticket(ticket)
             action()
             ticket.error = None
             ticket.paused_step = None
@@ -155,7 +164,9 @@ def _run_check(project: Project, ticket_id: str, command: str) -> tuple[bool, st
             command, project.path, {**os.environ, **environment}, project.profile.limits.check_timeout_minutes
         )
     except AppException as error:
+        append_event(project.name, ticket_id, {"kind": CHECK_EVENT, "command": command, "passed": False})
         return False, str(error)
+    append_event(project.name, ticket_id, {"kind": CHECK_EVENT, "command": command, "passed": code == 0})
     return code == 0, f"{stdout}{stderr}"
 
 
@@ -182,8 +193,11 @@ def _start_services(project: Project) -> None:
 def _record_baseline(project: Project, ticket: Ticket) -> None:
     """Run the checks once on the untouched base; only checks that pass here are enforced later.
 
-    A new project has no base to compare with, so every check is the ticket's own to make pass.
+    A new project has no base to compare with, so every check is the ticket's own to make pass. The containers start
+    first, so tests that need them are not mistaken for tests that already fail.
     """
+    if not ticket.new_project:
+        _start_services(project)
     for name, command in project.checks():
         if ticket.new_project:
             ticket.baseline[name] = True
@@ -229,6 +243,7 @@ def _resume_or_start_agent[T: BaseModel](
     output_model: type[T],
     session: str | None,
     prompt: Callable[[bool], str],
+    label: str = "",
 ) -> tuple[T, str]:
     """Run an agent, in the session it already has when there is one, and return its result and session.
 
@@ -249,6 +264,7 @@ def _resume_or_start_agent[T: BaseModel](
                 ticket.id,
                 session,
                 new_project=ticket.new_project,
+                label=label,
             )
         except AppException as error:
             if error.error_code != AppErrorCode.AGENT_FAILED or error.usage is not None:
@@ -266,6 +282,7 @@ def _resume_or_start_agent[T: BaseModel](
             output_model,
             ticket.id,
             new_project=ticket.new_project,
+            label=label,
         )
     ticket.runs.append(usage)
     return agent_result, usage.session_id
@@ -289,6 +306,7 @@ def _worker(
             if fresh
             else prompts.resumed_worker_prompt(ticket, worker, instruction)
         ),
+        f"{worker} · {task}" if task else worker,
     )
     actual_files = git.changed_files(project.path, tree_before, git.snapshot(project.path))
     size = ticket.runs[-1].context_per_turn()
@@ -318,6 +336,8 @@ def _worker(
             f"{SCOPE_WARNING} {label}:",
             f"worker {worker} changed files outside its task: {', '.join(unexpected)}" if unexpected else None,
         )
+        written = sum(len(entry.project_notes) for entry in ticket.work_log)
+        notes_kept = worker_result.project_notes[: max(TICKET_MAX_NOTES - written, 0)]
         ticket.work_log.append(
             WorkEntry(
                 at=utc_now(),
@@ -327,10 +347,10 @@ def _worker(
                 worker=worker,
                 files=actual_files,
                 handoff=worker_result.handoff,
-                project_notes=worker_result.project_notes,
+                project_notes=notes_kept,
             )
         )
-        notes = project_memory.add_notes(project.path, worker_result.project_notes)
+        notes = project_memory.add_notes(project.path, notes_kept)
         _set_warning(
             ticket,
             MEMORY_WARNING,
@@ -436,10 +456,8 @@ def _assign_workers(subtasks: list[Subtask], max_workers: int) -> None:
         task.worker = assigned[task.worker]
 
 
-def _plan(settings: Settings, project: Project, ticket: Ticket, feedback: str | None) -> None:
-    """Run the planner and move the ticket to questions, a split, or approval."""
-    ticket.status = TicketStatus.IN_PROGRESS
-    limits = project.profile.limits
+def _run_planner(settings: Settings, project: Project, ticket: Ticket, feedback: str | None) -> PlannerResult:
+    """Run the planner in its session with the user's feedback, if any, and return its result."""
     plan_result, ticket.planner_session = _resume_or_start_agent(
         settings,
         project,
@@ -449,6 +467,14 @@ def _plan(settings: Settings, project: Project, ticket: Ticket, feedback: str | 
         ticket.planner_session,
         lambda fresh: prompts.planner_prompt(project, ticket, feedback),
     )
+    return plan_result
+
+
+def _plan(settings: Settings, project: Project, ticket: Ticket, feedback: str | None) -> None:
+    """Run the planner and move the ticket to questions, a split, or approval."""
+    ticket.status = TicketStatus.IN_PROGRESS
+    limits = project.profile.limits
+    plan_result = _run_planner(settings, project, ticket, feedback)
     if len(plan_result.split) > 1:
         ticket.split = plan_result.split
         ticket.questions = [
@@ -463,11 +489,18 @@ def _plan(settings: Settings, project: Project, ticket: Ticket, feedback: str | 
         ticket.question_rounds += 1
         ticket.status = TicketStatus.NEEDS_INPUT
         return
+    if not plan_result.plan.strip():
+        logger.info("The planner returned no plan after its last question round; asking it to plan now.")
+        plan_result = _run_planner(settings, project, ticket, prompts.PLAN_NOW)
+    if not plan_result.plan.strip():
+        ticket.questions = plan_result.questions or [prompts.NO_PLAN]
+        ticket.status = TicketStatus.NEEDS_INPUT
+        return
     ticket.questions = []
     ticket.plan = plan_result.plan
     ticket.options_considered = plan_result.options_considered
     ticket.files = plan_result.files
-    ticket.context_pack = plan_result.context_pack
+    ticket.context_pack = [anchor for anchor in plan_result.context_pack if (project.path / anchor.path).is_file()]
     ticket.subtasks = plan_result.subtasks or [
         Subtask(id="S1", title=ticket.title, instructions=plan_result.plan, files=plan_result.files)
     ]
@@ -552,12 +585,19 @@ def _open_ticket_on(project: Project) -> str | None:
     return None
 
 
-def start_ticket(
-    project_name: str, prompt: str, plan_first: bool, new_project: bool = False, base: str | None = None
+def _create_ticket(
+    settings: Settings,
+    project: Project,
+    prompt: str,
+    plan_first: bool,
+    new_project: bool,
+    base: str | None,
+    previous_branch: str | None = None,
 ) -> Ticket:
-    """Create a ticket on a new branch from the base (or the branch you name), then plan or work on it."""
-    settings = get_settings()
-    project = settings.project(project_name)
+    """Create a ticket on a new branch from the base (or the branch you name) and record the checks' baseline.
+
+    When the containers do not start, the new branch is removed again and the checkout goes back where it was.
+    """
     checkout = project.path
     if not git.is_clean(checkout):
         open_ticket = _open_ticket_on(project)
@@ -565,7 +605,7 @@ def start_ticket(
         raise AppException(AppErrorCode.INVALID_STATE, f"{project.name} has uncommitted changes; {hint}.")
     title = make_title(prompt)
     ticket_id = new_ticket_id(title)
-    previous_branch = git.current_branch(checkout)
+    current_branch = git.current_branch(checkout)
     target = base or project.base_branch
     start_point, fetch_warning = git.fetch_base(checkout, project.remote, target)
     now = utc_now()
@@ -578,7 +618,7 @@ def start_ticket(
         branch=f"{BRANCH_PREFIX}{ticket_id}",
         base_branch=start_point,
         target_branch=target,
-        previous_branch=previous_branch,
+        previous_branch=previous_branch or current_branch,
         base_sha=git.git(checkout, "rev-parse", start_point),
         owner=git.user_name(checkout),
         toolkit_version=toolkit_version(settings),
@@ -590,11 +630,27 @@ def start_ticket(
     _set_warning(ticket, FETCH_WARNING, fetch_warning)
     with project_lock(project.name, ticket.id):
         git.switch_new(checkout, ticket.branch, start_point)
-        logger.info("Ticket %s on branch %s in %s (was on %s)", ticket.id, ticket.branch, checkout, previous_branch)
-        _record_baseline(project, ticket)
+        logger.info("Ticket %s on branch %s in %s (was on %s)", ticket.id, ticket.branch, checkout, current_branch)
+        try:
+            _record_baseline(project, ticket)
+        except AppException:
+            git.delete_uncommitted_changes(checkout)
+            git.switch(checkout, current_branch)
+            git.delete_branch(checkout, ticket.branch)
+            raise
         if not new_project:
             repo_map.write_project_repo_map(checkout, repo_map_path(project.name))
         write_ticket(ticket)
+    return ticket
+
+
+def start_ticket(
+    project_name: str, prompt: str, plan_first: bool, new_project: bool = False, base: str | None = None
+) -> Ticket:
+    """Create a ticket on a new branch from the base (or the branch you name), then plan or work on it."""
+    settings = get_settings()
+    project = settings.project(project_name)
+    ticket = _create_ticket(settings, project, prompt, plan_first, new_project, base)
     if plan_first:
         _guarded(project, ticket, Step.PLAN, lambda: _plan(settings, project, ticket, None))
     else:
@@ -603,21 +659,26 @@ def start_ticket(
 
 
 def split_ticket(ticket_id: str) -> list[Ticket]:
-    """Start one ticket per change the planner split out, one after another, then abandon the original."""
+    """Create one ticket per change the planner split out, then abandon the original.
+
+    No agent runs here: each new ticket waits, paused before its plan, until you start it with `cw resume`.
+    The original is abandoned only once every new ticket exists.
+    """
     ticket = find_ticket(ticket_id)
     if not ticket.split:
         raise AppException(AppErrorCode.INVALID_STATE, f"{ticket.id} has nothing to split.")
-    prompts_to_start = list(ticket.split)
+    settings, project, checkout = _context(ticket)
+    current_branch = git.current_branch(checkout)
+    created = []
+    for prompt in ticket.split:
+        new_ticket = _create_ticket(
+            settings, project, prompt, True, False, ticket.target_branch or None, ticket.previous_branch
+        )
+        git.switch(checkout, current_branch)
+        _stop(new_ticket, Step.PLAN, TicketStatus.PAUSED, f"Split from {ticket.id}: cw resume {new_ticket.id}.")
+        created.append(new_ticket)
     finish(ticket.id, abandon=True)
-    started = []
-    for prompt in prompts_to_start:
-        try:
-            new_ticket = start_ticket(ticket.project, prompt, plan_first=False, base=ticket.target_branch or None)
-            park(new_ticket.id)
-            started.append(new_ticket)
-        except AppException as error:
-            logger.error("Could not finish the ticket for %r: %s", prompt[:60], error)
-    return started
+    return created
 
 
 def _answer_from_user(ticket: Ticket, text: str) -> None:
@@ -671,35 +732,63 @@ def _last_round(ticket: Ticket) -> list[ReviewEntry]:
     return [entry for entry in ticket.reviews if entry.round == latest]
 
 
-def _findings(entries: list[ReviewEntry]) -> list:
-    """Return every finding of the reviews that asked for changes."""
-    return [comment for entry in entries if entry.verdict == Verdict.CHANGES for comment in entry.comments]
+def _minor_findings(entries: list[ReviewEntry]) -> list[ReviewComment]:
+    """Return the minor findings of these reviews."""
+    return [comment for entry in entries for comment in entry.comments if comment.severity == Severity.MINOR]
 
 
-def _blocking(entries: list[ReviewEntry]) -> list:
-    """Return the blocking findings of reviews that asked for changes."""
-    return [comment for comment in _findings(entries) if comment.severity == Severity.BLOCKING]
+def _anchored(project: Project, comments: list[ReviewComment], changed: list[str]) -> list[ReviewComment]:
+    """Drop findings on files that neither exist nor changed, and move a line past the end onto the file's last line."""
+    kept = []
+    for comment in comments:
+        path = project.path / comment.path
+        if not path.is_file():
+            if comment.path in changed:
+                kept.append(comment)
+            else:
+                logger.warning("Dropped a finding on %s, which is not in the checkout.", comment.path)
+            continue
+        last_line = max(len(path.read_text(encoding="utf-8", errors="replace").splitlines()), 1)
+        kept.append(comment.model_copy(update={"line": min(max(comment.line, 1), last_line)}))
+    return kept
 
 
-def _review(settings: Settings, project: Project, ticket: Ticket) -> None:
-    """Review the change, let the worker fix blocking findings, and review the fix; then report what is left."""
+def _numbered(ticket: Ticket, comments: list[ReviewComment]) -> list[ReviewComment]:
+    """Give each new finding a ticket-wide id (F1, F2, ...), by which a later review says it is fixed."""
+    count = sum(len(entry.comments) for entry in ticket.reviews)
+    return [
+        comment.model_copy(update={"id": f"{FINDING_PREFIX}{number}"})
+        for number, comment in enumerate(comments, start=count + 1)
+    ]
+
+
+def _review(settings: Settings, project: Project, ticket: Ticket, paths: tuple[str, ...] = ()) -> None:
+    """Review the change, let the worker fix blocking findings, and review the fix; then report what is left.
+
+    cw decides from the severities, not from the model's verdict. A blocking finding stays open until a later review
+    names it as fixed, so reviewing only the new diff never drops it. `paths` limits the review to those files.
+    """
     limits = project.profile.limits
     for round_index in range(limits.max_review_rounds + 1):
         tree = git.snapshot(project.path)
-        full_diff = git.diff(project.path, ticket.last_reviewed_tree or ticket.base_sha, tree)
+        start = ticket.last_reviewed_tree or ticket.base_sha
+        full_diff = git.diff(project.path, start, tree, *paths)
         if not full_diff.strip():
             break
         diff = full_diff[: limits.max_diff_chars]
         previous = _last_round(ticket)
         next_round = (previous[0].round + 1) if previous else 1
-        changed = git.changed_files(project.path, ticket.last_reviewed_tree or ticket.base_sha, tree)
+        changed = git.changed_files(project.path, start, tree, *paths)
+        still_open = list(ticket.open_findings)
+        resolved: set[str] = set()
+        new_blocking = []
         for reviewer in project.profile.reviewers:
             review_result, usage = run_agent(
                 settings,
                 project,
                 reviewer,
                 AgentRole.REVIEWER,
-                prompts.reviewer_prompt(project, ticket, diff, len(full_diff) > len(diff), previous),
+                prompts.reviewer_prompt(project, ticket, diff, len(full_diff) > len(diff), still_open),
                 project.path,
                 ReviewerResult,
                 ticket.id,
@@ -707,30 +796,35 @@ def _review(settings: Settings, project: Project, ticket: Ticket) -> None:
                 new_project=ticket.new_project,
             )
             ticket.runs.append(usage)
+            comments = _numbered(ticket, _anchored(project, review_result.comments, changed))
+            blocking = [comment for comment in comments if comment.severity == Severity.BLOCKING]
+            resolved.update(review_result.resolved)
+            new_blocking += blocking
             ticket.reviews.append(
                 ReviewEntry(
                     at=utc_now(),
                     round=next_round,
                     reviewer=reviewer,
-                    verdict=review_result.verdict,
+                    verdict=Verdict.CHANGES if blocking else Verdict.APPROVE,
                     summary=review_result.summary,
-                    comments=review_result.comments,
+                    comments=comments,
                 )
             )
+        ticket.open_findings = [finding for finding in still_open if finding.id not in resolved] + new_blocking
         ticket.last_reviewed_tree = tree
         write_ticket(ticket)
-        blocking = _blocking(_last_round(ticket))
-        if not blocking or round_index == limits.max_review_rounds:
+        if not ticket.open_findings or round_index == limits.max_review_rounds:
             break
-        logger.info("Reviewer asked for changes; fix round %s of %s.", round_index + 1, limits.max_review_rounds)
-        _fix(settings, project, ticket, prompts.fix_review_instruction(_findings(_last_round(ticket))))
+        logger.info("Blocking findings are open; fix round %s of %s.", round_index + 1, limits.max_review_rounds)
+        findings = ticket.open_findings + _minor_findings(_last_round(ticket))
+        _fix(settings, project, ticket, prompts.fix_review_instruction(findings))
         _checks_with_fixes(settings, project, ticket)
-    left = len(_blocking(_last_round(ticket)))
+    left = len(ticket.open_findings)
     _set_warning(ticket, REVIEW_WARNING, f"{left} blocking findings left after the fix round." if left else None)
 
 
-def _resolve_conflicts(settings: Settings, project: Project, ticket: Ticket, base_ref: str) -> None:
-    """Let the worker resolve a stopped merge; cw stages the result and commits the merge."""
+def _resolve_conflicts(settings: Settings, project: Project, ticket: Ticket, base_ref: str) -> list[str]:
+    """Let the worker resolve a stopped merge; cw stages the result, commits the merge and returns the files."""
     checkout = project.path
     files = git.conflicted_files(checkout)
     if not files:
@@ -739,29 +833,34 @@ def _resolve_conflicts(settings: Settings, project: Project, ticket: Ticket, bas
             AppErrorCode.GIT_FAILED, f"Merging {base_ref} failed without conflicts; try `git merge {base_ref}` by hand."
         )
     limits = project.profile.limits
+    conflicted = files
     for attempt in range(1, limits.max_conflict_rounds + 1):
         logger.info("Merge conflicts in %s; attempt %s of %s.", ", ".join(files), attempt, limits.max_conflict_rounds)
         _fix(settings, project, ticket, prompts.conflict_instruction(files, base_ref))
         files = git.files_with_conflict_markers(checkout, files)
         if not files:
             git.conclude_merge(checkout, MERGE_COMMIT_MESSAGE)
-            return
+            return conflicted
     git.abort_merge(checkout)
     raise AppException(AppErrorCode.MERGE_CONFLICT, f"Merging {base_ref}.")
 
 
-def _sync_base(settings: Settings, project: Project, ticket: Ticket) -> None:
-    """Merge the latest base branch into the ticket branch, letting the worker resolve conflicts."""
+def _sync_base(settings: Settings, project: Project, ticket: Ticket) -> list[str]:
+    """Merge the latest base branch into the ticket branch; return the files whose conflicts the worker resolved.
+
+    A clean merge brings only the base's own, already reviewed work, so the review moves past it.
+    """
     checkout = project.path
     base_ref, fetch_warning = git.fetch_base(checkout, project.remote, _target(project, ticket))
     _set_warning(ticket, FETCH_WARNING, fetch_warning)
     if fetch_warning and git.remote_url(checkout, project.remote):
-        return
+        return []
     before = git.snapshot(checkout)
     if not git.merge(checkout, base_ref):
-        _resolve_conflicts(settings, project, ticket, base_ref)
+        return _resolve_conflicts(settings, project, ticket, base_ref)
     if ticket.last_reviewed_tree == before:
         ticket.last_reviewed_tree = git.snapshot(checkout)
+    return []
 
 
 def _require_changes(project: Project, ticket: Ticket) -> None:
@@ -805,7 +904,12 @@ def _open_pull_request(settings: Settings, project: Project, ticket: Ticket) -> 
     else:
         git.commit_all(checkout, message)
     logger.info("Committed: %s", message)
-    _sync_base(settings, project, ticket)
+    resolved = _sync_base(settings, project, ticket)
+    if resolved:
+        logger.info("Checking and reviewing the conflict resolution in %s.", ", ".join(resolved))
+        _checks_with_fixes(settings, project, ticket)
+        _review(settings, project, ticket, tuple(resolved))
+        git.commit_all(checkout, message)
     ticket.status = TicketStatus.PR_OPEN
     if not git.remote_url(checkout, project.remote):
         merge_hint = f"`cw done {ticket.id}` merges it into {target}."
@@ -816,7 +920,8 @@ def _open_pull_request(settings: Settings, project: Project, ticket: Ticket) -> 
     logger.info("Pushed %s to %s.", ticket.branch, project.remote)
     host = setup_git_host(settings, project, checkout)
     final = _last_round(ticket)
-    if ticket.pr_number is None:
+    first_post = ticket.pr_number is None
+    if first_post:
         pull_request = host.create_pull_request(
             ticket.branch, target, ticket.title, prompts.pull_request_body(ticket, final)
         )
@@ -824,10 +929,22 @@ def _open_pull_request(settings: Settings, project: Project, ticket: Ticket) -> 
         ticket.pr_url = pull_request.url
         logger.info("Opened %s", pull_request.url)
     if final and final[0].round > ticket.posted_review_round:
-        for entry in final:
+        shown = {comment.id for entry in final for comment in entry.comments}
+        earlier = [finding for finding in ticket.open_findings if finding.id not in shown]
+        for index, entry in enumerate(final):
             summary = f"**{entry.reviewer}** · {entry.verdict}\n\n{entry.summary}"
-            host.post_review(ticket.pr_number, summary, entry.comments)
+            comments = entry.comments + (earlier if index == 0 else [])
+            if first_post:
+                host.post_review(ticket.pr_number, summary, comments)
+            else:
+                host.post_review(ticket.pr_number, _join_findings(summary, comments), [])
         ticket.posted_review_round = final[0].round
+
+
+def _join_findings(summary: str, comments: list[ReviewComment]) -> str:
+    """Return a review summary with its findings listed in the text, for a review posted without new threads."""
+    listed = "\n".join(f"- `{comment.path}:{comment.line}` ({comment.severity}) {comment.body}" for comment in comments)
+    return f"{summary}\n\n{listed}" if listed else summary
 
 
 def _for_review(ticket_id: str) -> tuple[Settings, Project, Ticket]:
@@ -863,27 +980,32 @@ def _open_pull_request_of(ticket_id: str) -> tuple[Settings, Project, Ticket]:
 
 
 def _fix_pull_request(settings: Settings, project: Project, ticket: Ticket) -> None:
-    """Fix the open comments, push the way `cw pr` does and resolve them, round after round until none are left.
+    """Address the open comments and blocking findings, then check, review, push and resolve the comments; repeat.
 
-    A new review can leave new comments, so the loop goes on up to `max_pull_request_fix_rounds`. A round in which
-    the worker changed nothing ends it, since another round would get the same answer.
+    Each pass's review is posted as a comment, not as new threads, so cw does not feed its own reviews back as
+    comments. The loop goes on while blocking findings stay open, up to `max_pull_request_fix_rounds`, and a pass in
+    which the worker changed nothing ends it. Findings still open keep `cw merge` from merging.
     """
     host = setup_git_host(settings, project, project.path)
     rounds = project.profile.limits.max_pull_request_fix_rounds
     for round_number in range(1, rounds + 1):
         threads = host.open_threads(ticket.pr_number)
-        if not threads:
-            logger.info("No open comments on %s.", ticket.pr_url)
+        findings = [
+            finding for finding in ticket.open_findings if not any(finding.body in thread.body for thread in threads)
+        ]
+        if not threads and not findings:
+            logger.info("No open comments or blocking findings on %s.", ticket.pr_url)
             return
         logger.info(
-            "Fix round %s of %s: %s open comment(s) go to worker %s.",
+            "Fix round %s of %s: %s comment(s) and %s finding(s) go to worker %s.",
             round_number,
             rounds,
             len(threads),
+            len(findings),
             ticket.last_worker,
         )
         tree_before = git.snapshot(project.path)
-        worker_result = _fix(settings, project, ticket, prompts.pull_request_comments_instruction(threads))
+        worker_result = _fix(settings, project, ticket, prompts.pull_request_comments_instruction(threads, findings))
         changed = git.snapshot(project.path) != tree_before
         _open_pull_request(settings, project, ticket)
         host.post_review(
@@ -893,11 +1015,7 @@ def _fix_pull_request(settings: Settings, project: Project, ticket: Ticket) -> N
             host.resolve_thread(ticket.pr_number, thread.id)
         if not changed:
             logger.info("Worker %s changed nothing this round; stopping.", ticket.last_worker)
-            break
-    left = len(host.open_threads(ticket.pr_number))
-    _set_warning(
-        ticket, PULL_REQUEST_WARNING, f"{left} comment(s) still open on {ticket.pr_url} after cw fix." if left else None
-    )
+            return
 
 
 def fix_pull_request(ticket_id: str) -> Ticket:
@@ -917,7 +1035,7 @@ def merge_pull_request(ticket_id: str) -> Ticket:
         raise AppException(AppErrorCode.TICKET_BUSY, ticket.id)
     if git.current_branch(checkout) == ticket.branch and not git.is_clean(checkout):
         raise AppException(AppErrorCode.INVALID_STATE, f"{ticket.branch} has uncommitted changes.")
-    left = _blocking(_last_round(ticket))
+    left = ticket.open_findings
     if left:
         raise AppException(
             AppErrorCode.INVALID_STATE,
@@ -944,8 +1062,10 @@ def _step_to_resume(ticket: Ticket) -> Step | None:
         return ticket.paused_step
     if ticket.status not in STALE_STATUSES or is_running(ticket):
         return None
+    if ticket.paused_step:
+        return ticket.paused_step
     if ticket.status == TicketStatus.IN_REVIEW:
-        return Step.PR
+        return Step.REVIEW
     still_planning = ticket.route == Route.PLANNED and not ticket.subtasks
     return Step.PLAN if still_planning else Step.WORK
 

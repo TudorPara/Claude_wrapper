@@ -50,6 +50,11 @@ def test_a_project_goes_from_an_idea_to_a_merged_commit_through_the_command_line
 
     approved = cw("approve", ticket).stderr
     assert "ready" in approved and "Task S2 · Step 2 (worker W1)" in approved
+    events = json.loads(cw("events", ticket, "--json").stdout)
+    started = [event["label"] for event in events if event["kind"] == "start"]
+    assert started == ["planner", "W1 · S1", "W1 · S2"]
+    assert {"tool", "done", "check"} <= {event["kind"] for event in events}
+    assert len(json.loads(cw("events", ticket, "--json", "--last", "2").stdout)) == 2
     assert "merge it with: cw done" in cw("pr", ticket).stderr
     cw("done", ticket)
 
@@ -59,6 +64,8 @@ def test_a_project_goes_from_an_idea_to_a_merged_commit_through_the_command_line
     assert git(project, "status", "--porcelain") == ""
     shown = json.loads(cw("show", ticket, "--json").stdout)
     assert shown["status"] == "done" and len(shown["runs"]) == 4
+    assert [run["label"] for run in shown["runs"]] == ["planner", "W1 · S1", "W1 · S2", "reviewer"]
+    assert {row["check"] for row in json.loads(cw("doctor", "--json").stdout)} >= {"binary git"}
     shown_text = cw("show", ticket).stdout
     assert (
         "### [x] S2 · Step 2 (worker W1)" in shown_text and "- Solved by W1: step 2\n- Files: step_2.txt" in shown_text

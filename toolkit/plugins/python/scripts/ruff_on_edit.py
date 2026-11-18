@@ -2,6 +2,9 @@
 
 A file is held to the standard it met in the last commit: one that was unformatted, or had lint errors, before
 the edit is left as it is, so Claude is never sent to fix problems it did not cause. New files are held to both.
+Unused imports and variables are left alone: an import added in one edit is often used in the next, and the
+project's lint check catches what is still unused at the end. When ruff changed the file, Claude is told to read it
+again before its next edit.
 """
 
 import json
@@ -16,6 +19,7 @@ PYTHON_SUFFIX = ".py"
 PROJECT_MARKER = "pyproject.toml"
 PROJECT_RUFF = Path(".venv") / "bin" / "ruff"
 STDIN = "-"
+UNFINISHED_EDIT_RULES = "F401,F841"
 
 
 def _project_root(file_path: Path) -> Path:
@@ -61,14 +65,23 @@ def main() -> int:
     from_stdin = ["--stdin-filename", str(file_path), STDIN]
     was_formatted = committed is None or _ruff(ruff, ["format", "--check", *from_stdin], root, committed)
     was_lint_clean = committed is None or _ruff(ruff, ["check", *from_stdin], root, committed)
+    before = file_path.read_text(encoding="utf-8", errors="replace")
     check = None
     if was_lint_clean:
-        check = subprocess.run([*ruff, "check", "--fix", str(file_path)], cwd=root, capture_output=True, text=True)
+        check = subprocess.run(
+            [*ruff, "check", "--fix", "--ignore", UNFINISHED_EDIT_RULES, str(file_path)],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
     if was_formatted:
         _ruff(ruff, ["format", str(file_path)], root)
     if check is not None and check.returncode == RUFF_FOUND_ERRORS:
         print(f"ruff found problems in {file_path}:\n{check.stdout}{check.stderr}", file=sys.stderr)
         return FEEDBACK_EXIT_CODE
+    if file_path.read_text(encoding="utf-8", errors="replace") != before:
+        context = f"ruff reformatted or fixed {file_path}; read it again before you edit it."
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": context}}))
     return 0
 
 

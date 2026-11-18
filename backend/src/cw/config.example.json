@@ -60,9 +60,10 @@
       "onboarder": "sonnet"
     },
     "limits": {
-      "max_review_rounds": 1,
-      "max_fix_rounds": 1,
+      "max_review_rounds": 2,
+      "max_fix_rounds": 2,
       "max_conflict_rounds": 1,
+      "max_pull_request_fix_rounds": 3,
       "max_question_rounds": 1,
       "max_workers": 4,
       "escalate_file_threshold": 5,
@@ -72,7 +73,7 @@
       "agent_timeout_minutes": 45,
       "check_timeout_minutes": 15,
       "max_turns": {
-        "planner": 60,
+        "planner": 40,
         "worker": 70,
         "reviewer": 30,
         "onboarder": 60

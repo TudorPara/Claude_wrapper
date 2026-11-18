@@ -24,7 +24,7 @@ How to work:
 
 ## Writing tasks
 
-Each task goes to a separate worker that starts fresh. It sees the request, your plan, the task list, short summaries of finished tasks and its own task. It has not seen your reasoning or the instructions of the other tasks, and it cannot ask you anything. Write every task so that this worker can do it correctly without guessing.
+Each task goes to a worker. It sees the request, your plan, the task list, short summaries of finished tasks and its own task, but not your reasoning or the other tasks' instructions. A worker keeps its session between its own tasks, so it remembers what it did; a worker's first task starts fresh. It can ask you a question, but each question costs a round trip: write every task so it can be done correctly without guessing.
 
 - **One task is right for most changes.** Split only when the work has clearly separate steps (for example data layer, then API, then UI). Do not split a small change to look thorough, and do not make a task of a few edits: fold them into the related task.
 - **One outcome per task.** The `title` names it in a few words, starting with a verb: "Add the reminders table and repository".
@@ -45,7 +45,7 @@ When your prompt says the repository holds only a README, plan the whole project
 
 1. First task: the skeleton. The project files and dependencies, the lint and test commands named in your prompt, and one test that proves the application starts. Follow the stack and layout rules in your system prompt.
 2. Then one task per feature, the smallest useful slice first, each with its tests.
-3. Last task: `README.md` (what it is, how to install, run, lint and test it) and a `CLAUDE.md` of at most 40 lines with the same commands and where the main code lives. Every command stands on its own line with no comment after it, so it can be pasted into a shell as it is.
+3. Last task: `README.md` (what it is, how to install, run, lint and test it) and at most 40 lines in `CLAUDE.md` with the same commands and where the main code lives. cw already keeps a section `Notes kept by cw` in `CLAUDE.md`: the task edits the file above that section and leaves the section as it is. Every command stands on its own line with no comment after it, so it can be pasted into a shell as it is.
 
 Choose the simplest stack and structure the rules allow for what was asked, and state your assumptions at the top of the plan.
 

@@ -6,9 +6,9 @@ pin: true
 
 # Python rules
 
-The Nexttech rules for Python services. Each file in `topics/` is a skill or file from `nexttech-claude-kit`, copied with only the reviewers' names removed: edit the kit, then copy the file here again and remove the names. How these rules rank against the project's own decisions and the other skills, and what differs in a cw run, is in `rule-precedence`.
+The Nexttech rules for Python services. Each file in `topics/` is a skill or file from `nexttech-claude-kit`, copied with the reviewers' names removed. Two are adapted to a cw run, where an agent cannot invoke skills or run anything besides the lint and test commands: `core-rules` (the ladder's first line and section 5) and `review-checks`, the checks of the review procedure without its workflow and answer format. When the kit changes, copy the file again and redo these edits. How these rules rank against the project's own decisions and the other skills, and what differs in a cw run, is in `rule-precedence`.
 
-In a cw run, `core-rules`, `python-style` and the `ponytail` skill are always in your system prompt. The toolkit shows any other topic the first time you read or edit a file it covers, so you do not have to look for it. In an interactive session, read the file before you work in that area.
+In a cw run, `core-rules`, `python-style` and the `ponytail` skill are always in your system prompt, and a review also gets `git-and-pr` and `review-checks`. The toolkit shows any other topic the first time you read or edit a file it covers, so you do not have to look for it. In an interactive session, read the file before you work in that area.
 
 | Topic file | From the kit | Covers |
 |---|---|---|
@@ -21,4 +21,5 @@ In a cw run, `core-rules`, `python-style` and the `ponytail` skill are always in
 | `topics/data-and-migrations.md` | `nexttech-data-and-migrations` | ORM models, enums, constraints, Alembic |
 | `topics/agents.md` | `nexttech-agents` | Agents, tools, the orchestrator, streaming |
 | `topics/git-and-pr.md` | `nexttech-git-and-pr` | Branches, commits, the PR description, review replies |
-| `topics/pr-review-procedure.md` | `PR_review.md` | How a review is done, its checks and the answer format |
+| `topics/pr-review-procedure.md` | `PR_review.md` | How a review is done, its checks and the answer format (interactive reviews) |
+| `topics/review-checks.md` | `PR_review.md`, adapted | The checks and how to weigh a finding (cw reviews) |

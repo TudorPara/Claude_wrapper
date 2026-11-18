@@ -41,8 +41,8 @@ That writes `~/.cw/config.json`. Everything in it can be changed later in FRIDAY
 | Key | What it is | Default |
 |---|---|---|
 | `defaults.models` | model per agent: planner, worker, reviewer, onboarder | opus, sonnet, opus, sonnet |
-| `defaults.limits.max_fix_rounds` | worker retries when lint/tests it broke fail | 1 |
-| `defaults.limits.max_review_rounds` | worker fixes after the reviewer asks for changes | 1 |
+| `defaults.limits.max_fix_rounds` | worker retries when lint/tests it broke fail | 2 |
+| `defaults.limits.max_review_rounds` | worker fixes after the reviewer asks for changes | 2 |
 | `defaults.limits.max_question_rounds` | times the planner may ask you, and a worker may ask per instruction | 1 |
 | `defaults.limits.max_workers` | most workers the planner may spread a plan over; they take turns | 4 |
 | `defaults.limits.agent_timeout_minutes` | an agent run that takes longer is stopped | 45 |
@@ -121,18 +121,19 @@ FRIDAY runs `cw` through your login shell, so it sees the same `cw`, `claude`, `
 
 In FRIDAY:
 
-1. Pick the project in the **Projects** panel.
-2. Type the task in the **chat** on the right and press **Start ticket**.
+1. Pick the project in the sidebar. Its home page shows the checkout, what its tickets are doing, and a **Start a ticket** box (⌘N opens the same box from anywhere).
+2. Type the task and press **Start**.
    - Small task: leave **Plan first** off, and a worker starts right away.
    - Bigger task: turn **Plan first** on. You'll get a plan to approve, or questions to answer, first.
-   - Several features, each on its own branch: FRIDAY offers **Start N tickets**, one per feature.
-3. Watch the **next-step card** at the top of the chat. It says what's happening, whether the code is still local or already pushed, any warnings, and the button to press next.
-4. The agent works on a new branch (`cw/<id>`) **in your own checkout**, so you see the changes in your IDE, and changed files are coloured in FRIDAY's file tree. Don't edit that project while it works. Reply in the chat to adjust anything. If a worker needs something only you know, the ticket shows its question; your reply is the answer.
-   - Want to start something else in the same project first? **Park** (in the card's More menu, or `cw park <id>`) saves the work and switches you back. Only one ticket per project can have uncommitted work.
-5. Press **Review & open PR**. The reviewer always runs first and applies the team rules strictly; the worker gets one round to fix blocking findings. Then cw makes **one** commit, pushes it and opens the PR, with the review posted on it. Nothing leaves your Mac before this step. **Review only** runs the same review without committing anything.
-6. Merge the PR on GitHub or Bitbucket, then press **Mark done**.
+   - **From** starts the branch from another branch than the project's base (`--base`).
+   - Several features, each on its own branch: the planner says so, and **Start N tickets** creates one paused ticket per feature; start each with **Resume**.
+3. Open the ticket. At the top: the pipeline (Plan → Work n/m → Checks → Review → PR → Merge) and one card per agent (planner, W1, W2, …, reviewer). The agent working now is highlighted; click a card to see its tasks, handoffs, questions and runs. The tabs show the plan, each worker's pass, the review's findings, every tool call live, and the cost.
+4. The agent works on a new branch (`cw/<id>`) **in your own checkout**, so you see the changes in your IDE. Don't edit that project while it works. The box under the ticket answers questions, sends plan feedback or asks for more work.
+   - Want to start something else in the same project first? **More → Park** (or `cw park <id>`) saves the work and switches you back. Only one ticket per project can have uncommitted work.
+5. The bar above the box shows the next step and its button: **Approve plan**, **Resume**, **Review and open PR** or **Review only**. The reviewer always runs first; blocking findings get up to two fix rounds. Then cw makes **one** commit, pushes it and opens the PR, with the review posted on it. Nothing leaves your Mac before this step.
+6. **Fix comments** (`cw fix`) sends the PR's comments and open blocking findings to the worker, round after round while blocking findings stay open. **Merge** (`cw merge`) squash-merges once CI has passed and no blocking finding is open. If you merged on the host yourself, use **More → Done**.
 
-**Talking to FRIDAY.** Click the microphone under the chat box (or press ⇧⌘D), say what you want, click it again and press Return. Turn on **Speak replies** in Settings and FRIDAY says where the ticket stands when a step ends. Dictation needs FRIDAY to run as the app (`open friday/FRIDAY.app`); macOS asks once for the microphone and for speech recognition.
+**Talking to FRIDAY.** Click the microphone next to the box, say what you want, click it again and send. Turn on **Speak replies** in Settings and FRIDAY says where the ticket stands when a step ends. Dictation needs FRIDAY to run as the app (`open friday/FRIDAY.app`); macOS asks once for the microphone and for speech recognition.
 
 Or, in the terminal:
 
@@ -186,6 +187,6 @@ cw done <ticket-id>
 | Ticket **Paused** | You hit the Claude usage limit. Press **Resume** later. |
 | Ticket **Blocked** | A real error (git, code host, agent crash, time limit) or your own Stop / Ctrl+C is shown on the card. Fix it if needed, then **Resume**: a task list continues where it stopped. |
 | Ticket stays **In progress** but nothing runs | The process was killed. `cw resume <ticket>` continues it. |
-| Ticket **Needs your answer** | The planner or a worker asked something only you know. Reply with `cw run <ticket> "<answer>"` or in the chat. |
+| Ticket **Needs your answer** | The planner or a worker asked something only you know. Reply with `cw run <ticket> "<answer>"` or in the box under the ticket. |
 | "has uncommitted changes; park it" | Another ticket (or your own work) is in that checkout. Park it, open its PR, or commit/stash your own changes. |
 | FRIDAY shows nothing | Run `cw doctor` in a terminal, then check that FRIDAY → Settings has the right `cw` path. |

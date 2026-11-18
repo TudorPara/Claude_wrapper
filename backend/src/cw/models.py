@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
+from pydantic.json_schema import SkipJsonSchema
 
 from cw.config import ProjectCommands
 
@@ -88,6 +89,7 @@ class ReviewComment(BaseModel):
     line: int = Field(description="Line number in the new version of the file.")
     severity: Severity
     body: str
+    id: SkipJsonSchema[str] = ""
 
 
 class ContextAnchor(BaseModel):
@@ -132,9 +134,10 @@ class WorkerResult(BaseModel):
     )
     questions: list[str] = Field(description="Only with status question: what you need answered. Otherwise empty.")
     project_notes: list[str] = Field(
-        description="Lasting facts a future session in this repository needs and cannot see quickly in the code: "
-        "a command to use, where a kind of code lives, a decision and why, a trap. One line each, at most three. "
-        "Not what you did (that is summary). Empty when there is nothing; cw adds them to the project's CLAUDE.md."
+        default_factory=list,
+        description="Usually empty. Only a lasting fact a future session in this repository needs and cannot see "
+        "quickly in the code: a command to use, where a kind of code lives, a decision and why, a trap. One line "
+        "each, at most two. Not what you did (that is summary); cw adds them to the project's CLAUDE.md.",
     )
     commit_message: str
     reason: str
@@ -143,9 +146,12 @@ class WorkerResult(BaseModel):
 class ReviewerResult(BaseModel):
     """What a reviewer returns."""
 
-    verdict: Verdict
     summary: str
     comments: list[ReviewComment]
+    resolved: list[str] = Field(
+        default_factory=list,
+        description="Ids of the open findings in your prompt that the code now fixes. Empty when none were listed.",
+    )
 
 
 class Difference(BaseModel):
@@ -228,6 +234,7 @@ class RunUsage(BaseModel):
     cost_usd: float
     duration_ms: int
     num_turns: int
+    label: str = ""
 
     def context_per_turn(self) -> int:
         """Return the average context one turn sent, cached or not: the size of the session."""
@@ -271,6 +278,7 @@ class Ticket(BaseModel):
     work_log: list[WorkEntry] = []
     reviews: list[ReviewEntry] = []
     last_reviewed_tree: str | None = None
+    open_findings: list[ReviewComment] = []
     baseline: dict[str, bool] = {}
     failing_checks: list[str] = []
     new_project: bool = False

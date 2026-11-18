@@ -121,9 +121,9 @@ def snapshot(cwd: Path) -> str:
     return git(cwd, "write-tree")
 
 
-def diff(cwd: Path, old: str, new: str) -> str:
-    """Return the diff between two commits or trees."""
-    return git(cwd, "diff", old, new)
+def diff(cwd: Path, old: str, new: str, *paths: str) -> str:
+    """Return the diff between two commits or trees, optionally only for these paths."""
+    return git(cwd, "diff", old, new, "--", *paths)
 
 
 def diff_stat(cwd: Path, old: str, new: str) -> str:
@@ -131,9 +131,9 @@ def diff_stat(cwd: Path, old: str, new: str) -> str:
     return git(cwd, "diff", "--stat", old, new)
 
 
-def changed_files(cwd: Path, old: str, new: str) -> list[str]:
+def changed_files(cwd: Path, old: str, new: str, *paths: str) -> list[str]:
     """Return the paths under this folder that differ between two commits or trees, relative to it."""
-    return git(cwd, "diff", "--name-only", "--relative", old, new).splitlines()
+    return git(cwd, "diff", "--name-only", "--relative", old, new, "--", *paths).splitlines()
 
 
 def merge(cwd: Path, ref: str) -> bool:

@@ -9,7 +9,7 @@
   ],
   "review": [
     "git-and-pr",
-    "pr-review-procedure"
+    "review-checks"
   ],
   "topics": {
     "python-stack": [
@@ -60,6 +60,7 @@
       "*_tool.py"
     ],
     "git-and-pr": [],
-    "pr-review-procedure": []
+    "pr-review-procedure": [],
+    "review-checks": []
   }
 }

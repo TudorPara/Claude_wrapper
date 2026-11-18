@@ -82,7 +82,8 @@ class Limits(StrictModel):
     max_fix_rounds: NonNegativeInt = Field(description="Fix rounds after lint or tests fail.")
     max_conflict_rounds: NonNegativeInt = Field(description="Attempts to resolve merge conflicts with the base branch.")
     max_pull_request_fix_rounds: PositiveInt = Field(
-        default=3, description="Rounds `cw fix` runs while the pull request still has open comments."
+        default=3,
+        description="Passes `cw fix` makes while blocking findings stay open and the worker still changes code.",
     )
     max_question_rounds: NonNegativeInt = Field(
         description="Times the planner may ask you, and times a worker may ask per instruction."

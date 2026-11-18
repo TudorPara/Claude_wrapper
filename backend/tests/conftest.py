@@ -55,10 +55,12 @@ class FakeAgents:
         self.prompts: list[tuple[AgentRole, str]] = []
         self.resumed: list[tuple[AgentRole, str | None]] = []
         self.review_files: list[list[str] | None] = []
+        self.labels: list[str] = []
         self.worker: Callable[[str, Path, int], WorkerResult] = self.default_worker
         self.reviewer: Callable[[str], ReviewerResult] = lambda prompt: ReviewerResult(
             verdict=Verdict.APPROVE, summary="fine", comments=[]
         )
+        self.planner: Callable[[str], PlannerResult] | None = None
         self.task_workers = ["W1", "W1"]
         self.planner_answers = ["use the settings value"]
 
@@ -75,14 +77,17 @@ class FakeAgents:
 
     def run(
         self, settings, project, agent_name, role, prompt, cwd, output_model, ticket_id, resume_session=None,
-        files=None, new_project=False,
+        files=None, new_project=False, label="",
     ):  # fmt: skip
         self.prompts.append((role, prompt))
+        self.labels.append(label or agent_name)
         self.resumed.append((role, resume_session))
         session = resume_session or f"{role.value}-{len(self.resumed)}"
         if role == AgentRole.WORKER:
             return self.worker(prompt, cwd, len(self.prompts_for(role))), usage(role, session)
         nothing = {"questions": [], "split": [], "plan": "", "options_considered": "", "subtasks": [], "files": []}
+        if role == AgentRole.PLANNER and self.planner:
+            return self.planner(prompt), usage(role, session)
         if role == AgentRole.PLANNER and "## Questions from worker" in prompt:
             return PlannerResult(**nothing, answers=self.planner_answers), usage(role, session)
         if role == AgentRole.PLANNER:
@@ -143,6 +148,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     config = json.loads(resources.files("cw").joinpath("config.example.json").read_text())
     config["toolkit"]["path"] = str(TOOLKIT)
     config["stacks"]["python"]["commands"] = {"lint": LINT_COMMAND, "test": TEST_COMMAND}
+    config["defaults"]["limits"] |= {"max_review_rounds": 1, "max_fix_rounds": 1}
     (home / "config.json").write_text(json.dumps(config))
     get_settings.cache_clear()
     yield tmp_path

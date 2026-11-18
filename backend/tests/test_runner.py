@@ -10,6 +10,7 @@ from cw import claude_runner, process
 from cw.config import AgentRole, get_settings
 from cw.errors import AppErrorCode, AppException
 from cw.models import WorkerResult
+from cw.tickets import events_path
 
 
 def test_run_process_returns_output_and_reports_each_line(tmp_path: Path) -> None:
@@ -40,10 +41,12 @@ def _stream(result: dict) -> str:
 def test_the_result_event_is_found_and_tool_calls_are_logged(caplog: pytest.LogCaptureFixture) -> None:
     stream = _stream({"type": "result", "is_error": False, "num_turns": 3})
     assert claude_runner._result_event(stream)["num_turns"] == 3
+    recorded = []
     with caplog.at_level(logging.INFO):
         for line in stream.splitlines():
-            claude_runner._log_tool_calls("worker", line)
+            claude_runner._log_tool_calls("worker", line, recorded.append)
     assert "worker · Edit src/a.py" in caplog.text
+    assert recorded == [{"kind": "tool", "tool": "Edit", "detail": "src/a.py"}]
 
 
 def _fake_cli(monkeypatch: pytest.MonkeyPatch, result: dict) -> list[list[str]]:
@@ -85,6 +88,10 @@ def test_run_agent_passes_the_limits_and_returns_the_structured_result(
     worker_turns = settings.project("demo").profile.limits.max_turns.worker
     assert command[command.index("--max-turns") + 1] == str(worker_turns)
     assert command[command.index("--output-format") + 1] == "stream-json" and "--verbose" in command
+    events = [json.loads(line) for line in events_path("demo", "t1").read_text().splitlines()]
+    assert [event["kind"] for event in events] == ["start", "done"]
+    assert events[1]["label"] == "worker" and events[1]["turns"] == 4 and events[1]["session_id"] == "abc"
+    assert usage.label == "worker"
 
 
 def test_a_run_that_hits_the_turn_limit_fails_with_its_reason_and_tokens(
@@ -98,6 +105,8 @@ def test_a_run_that_hits_the_turn_limit_fails_with_its_reason_and_tokens(
             settings, settings.project("demo"), "worker", AgentRole.WORKER, "x", repository, WorkerResult, "t1"
         )
     assert "error_max_turns" in str(raised.value) and raised.value.usage.num_turns == 40
+    last = json.loads(events_path("demo", "t1").read_text().splitlines()[-1])
+    assert last["kind"] == "error" and "error_max_turns" in last["message"]
 
 
 def test_rules_are_pinned_and_a_new_project_also_gets_the_stack_topic(workspace: Path) -> None:
@@ -121,7 +130,7 @@ def test_a_review_gets_the_rules_that_cover_the_changed_files(workspace: Path) -
         "core-rules",
         "python-style",
         "git-and-pr",
-        "pr-review-procedure",
+        "review-checks",
         "service-architecture",
         "data-and-migrations",
     ]

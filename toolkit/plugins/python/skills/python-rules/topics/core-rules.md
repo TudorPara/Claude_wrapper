@@ -33,7 +33,7 @@ The conventions in these skills are strict.
 
 ## 3. The ladder
 
-Writing code always starts with `/ponytail` (the skill in `.claude/skills/ponytail`; `/ponytail:ponytail` where it is installed as a plugin). The ladder as it is used here, stopping at the first rung that holds:
+Writing code always starts with the `ponytail` skill in your system prompt. The ladder as it is used here, stopping at the first rung that holds:
 
 1. Does this need to exist at all? If the need is speculative, skip it and say so in one line.
 2. Is it already in this codebase or in an open PR? Reuse it.
@@ -74,27 +74,25 @@ The same kind of table for `clean-code` is in `nexttech-python-style`.
 | Anything, to see what this project decided differently | `nexttech-project-rulings` |
 | Reviewing a PR, a branch or the working tree | `.claude/PR_review.md` |
 
-## 5. Before you push
+## 5. Before you finish
 
-1. `make lint` and `make format-check`: no finding your change added.
-2. These find nothing:
-   ```bash
-   grep -rnE "^\s*(from|import) src(\.| )" src alembic
-   grep -rnE "^[A-Za-z_][A-Za-z_0-9.]* *(:[^=]+)?= *.*get_settings\(\)" src
-   grep -rnE "^\s*print\(|StdOutCallbackHandler" src
-   grep -rnE "HTTPException|status_code|JSONResponse|fastapi" src/<package>/services src/<package>/repositories
-   grep -rc "logging.getLogger" src | grep -vE ":[01]$"
-   grep -rnE "def _?(remove|discard|requeue|upsert|handle|process|save|manage|execute)[a-z_]*\(" src --include='*.py'
-   grep -rnE "@dataclass|NamedTuple\)" src/<package>/services src/<package>/repositories src/<package>/models src/<package>/api
-   ```
-   This one finds only a module that holds an implementation of one of our own interfaces, and `nexttech-project-rulings` names each such module: `grep -rlE "qdrant|docling|fastembed|ollama|anthropic|azure" src/<package>/services src/<package>/api src/<package>/repositories --include='*.py'`.
-   And this shows no comment or `TODO` of yours: `grep -rnE '^\s*#|\s#\s' src alembic --include='*.py'`.
-3. `uv run python -c "import <package>.api.app"` imports cleanly.
-4. If a model or a migration changed: `alembic heads` shows one head, `alembic upgrade head` runs, `alembic check` reports no drift.
-5. Start the app and call every endpoint you touched: the happy path and at least one error path.
-6. Every new setting is in `config.py` and in `.env.example` under the same name.
-7. `git status`, then the full diff read line by line: only intended files, no dead code, no typo, no stray blank line.
-8. After an IDE rename, both names grepped in strings, prompts, env keys and docstrings.
-9. Every function you added or changed, read against "Functions and classes" in `nexttech-python-style`: it does one thing, its steps are in the order they happen, public methods come before private ones, nothing reaches through an object, and no comment stands in for a name.
+1. The lint and test commands in your prompt pass, with no finding your change added. cw runs them again after your task.
+2. A Grep search for each of these finds nothing in your change:
+   - `^\s*(from|import) src(\.| )`: a `src.` import.
+   - `^[A-Za-z_][A-Za-z_0-9.]* *(:[^=]+)?= *.*get_settings\(\)`: settings read at module level.
+   - `^\s*print\(|StdOutCallbackHandler`: a print or a debug callback.
+   - `HTTPException|status_code|JSONResponse|fastapi` in services or repositories.
+   - `def _?(remove|discard|requeue|upsert|handle|process|save|manage|execute)[a-z_]*\(`: a banned verb.
+   - `@dataclass|NamedTuple\)` in services, repositories, models or api.
+   - `^\s*#|\s#\s`: a comment or `TODO` of yours.
+   - A second `logging.getLogger` in one module.
+   - `qdrant|docling|fastembed|ollama|anthropic|azure` in services, api or repositories, outside the modules the project's rulings name.
+3. If a model or a migration changed: one Alembic head, a migration that matches the model, and `downgrade` undoing `upgrade`.
+4. Every new setting is in `config.py` and in `.env.example` under the same name.
+5. The full diff read line by line: only intended files, no dead code, no typo, no stray blank line.
+6. After a rename, both names searched in strings, prompts, env keys and docstrings.
+7. Every function you added or changed, read against "Functions and classes" in `nexttech-python-style`: it does one thing, its steps are in the order they happen, public methods come before private ones, nothing reaches through an object, and no comment stands in for a name.
 
-What reviewers flag most often, in the order to check it: names, placement, dead code, docstrings, hardcoded values, errors, comments, enum case, format. The counts are in `.claude/PR_review.md`.
+You cannot import the app, start it or call its endpoints: say in your summary which of these were not verified.
+
+What reviewers flag most often, in the order to check it: names, placement, dead code, docstrings, hardcoded values, errors, comments, enum case, format. The counts are in `PR_review.md`.
