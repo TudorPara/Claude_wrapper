@@ -87,6 +87,8 @@ you: prompt (terminal, FRIDAY chat or voice)        cw new <name> "<idea>" also 
                                        S1 (W1) ─► S2 (W1, same session) ─► S3 (W2, new session) ─► S4 (W1) …
                                        a worker's question ─► planner answers ─► or you do
                                        after every task: checks ─ broke? ─► one fix round by that worker
+                                                         ─ still broken? ─► back-off: a fresh session of that worker,
+                                                                            started from its reflection, + one fix round
                                                          ─ still broken? ─► the ticket stops (BLOCKED)
  │
  ▼
@@ -121,10 +123,11 @@ you: cw merge → refused while CI has not passed or a blocking finding is left 
 - **The review cannot be skipped.** `cw pr` always reviews first and then opens the PR. Findings left after the fix round are on the PR and on the ticket; you decide what to do with them. `cw review` runs the same review alone. The reviewer is told that the "Notes kept by cw" section of `CLAUDE.md` ships on purpose, whenever the diff contains it.
 - **PR comments are worked off with `cw fix`.** It reads the open (unresolved) comment threads on lines of the PR, from the reviewer agent and from people, gives them to the last worker in one instruction, then runs the same steps as `cw pr`: checks, review, a new commit, push. It posts the worker's summary on the PR, which says why a comment needed no change, and resolves the threads it sent. Comments in the PR's general conversation are not read. The new review can leave new comments, so `cw fix` goes round again until none are left, at most `max_pull_request_fix_rounds` times (3). A round in which the worker changed nothing ends it, and comments still open afterwards get a `Pull request:` warning.
 - **`cw merge` squash-merges, and only when it is safe.** It refuses while the PR's CI has not passed (a PR without checks passes), while cw's last review left a blocking finding, or while the checkout has uncommitted changes on the ticket's branch. Then it squash-merges on the host with the ticket's commit message, deletes the branch there, fast-forwards your local base branch to the host's (a warning if it has diverged), deletes the local branch, and closes the ticket like `cw done`.
-- **A task whose checks still fail after its fix round stops the ticket** instead of letting the next task build on untested code. The cause is often outside the code (a missing setting, a database that is not running), and the worker's summary says so. Fix it and run `cw resume`: the task runs again, then the checks.
+- **A task whose checks still fail after its fix round backs off once.** The worker's last fix answer holds a `reflection` (what it tried, why it may still fail, what to try next). cw drops that worker's session and starts a fresh one with the task, the reflection and the failing output, without the failed attempt's history; this is ReAct's "switch method instead of adding steps" plus Reflexion's written lesson, and dropping the old tool outputs is what *The Complexity Trap* found halves cost. `max_backoff_rounds` (1) caps it.
+- **A task whose checks still fail after the back-off stops the ticket** instead of letting the next task build on untested code. The cause is often outside the code (a missing setting, a database that is not running), and the worker's summary says so. Fix it and run `cw resume`: the task runs again, then the checks.
 - **cw starts the project's containers.** When a project has a `compose_file` and the file exists, cw runs `docker compose --file <file> up --detach --wait` before every worker run and every check, because workers may run only the lint and test commands. It returns at once when the containers already run. A failure (Docker not running, a port already taken) stops the ticket with Docker's reason. `cw new` sets `compose_file` to `dev/docker-compose.yml`, and the planner's skeleton task writes that file, with a healthcheck per service.
 - **A new project's agents write its `.env`.** `cw new` leaves `.env` off the project's protected paths, so the skeleton task writes working local development values (random values for local secrets, never real ones) next to `.env.example`. `.env` is gitignored, so it never reaches the repository; the tests use their own database.
-- **Every repeat is capped** by config: fix rounds, review rounds, question rounds and conflict rounds default to 1, PR fix rounds to 3, every agent has a turn cap and a time limit. Nothing loops by itself.
+- **Every repeat is capped** by config: fix rounds, back-off rounds, review rounds, question rounds and conflict rounds default to 1, PR fix rounds to 3, every agent has a turn cap and a time limit. Nothing loops by itself.
 - **A stop is never final.** Ctrl+C, FRIDAY's Stop, an error, a time limit or the usage limit leave the ticket blocked or paused with the step recorded; `cw resume` continues, and a task list continues at the first unfinished task.
 
 ---
@@ -276,7 +279,7 @@ Validated on every run; unknown keys are rejected. FRIDAY saves through `cw conf
 | `stacks.<name>` | marker files (detection), toolkit plugins, extra pinned skills, external plugins, starting `commands` (lint, test) |
 | `default_protected_paths` | copied into each new project |
 | `defaults` / `projects[].profile` | model per agent, `worker_permission_mode`, `reviewers`, and `limits` |
-| `limits` | `max_review_rounds`, `max_fix_rounds`, `max_conflict_rounds`, `max_question_rounds` (all 1), `max_pull_request_fix_rounds` (3), `max_workers` (4), `escalate_file_threshold` (5), `summary_max_lines`, `max_diff_chars`, `max_check_output_chars`, `agent_timeout_minutes` (45), `check_timeout_minutes` (15), `max_turns` per agent (worker 40) |
+| `limits` | `max_review_rounds`, `max_fix_rounds`, `max_backoff_rounds`, `max_conflict_rounds`, `max_question_rounds` (all 1), `max_pull_request_fix_rounds` (3), `max_workers` (4), `escalate_file_threshold` (5), `summary_max_lines`, `max_diff_chars`, `max_check_output_chars`, `agent_timeout_minutes` (45), `check_timeout_minutes` (15), `max_turns` per agent (worker 40) |
 | `projects[]` | name, path, base branch, remote, stack, git host, lint and test commands, protected paths, extra allowed shell prefixes, environment, `compose_file` (the containers cw starts; empty for none) |
 
 `max_workers`, `agent_timeout_minutes` and `check_timeout_minutes` have defaults, so a config written before they existed still loads. Which skills are pinned is decided in the toolkit (`pin: true` in a skill's front matter), not here, so the whole team gets the same rules. Secrets come only from the environment (`BITBUCKET__EMAIL`, `BITBUCKET__API_TOKEN`). `CW_HOME` moves the whole `~/.cw` folder.
@@ -336,7 +339,7 @@ Where the savings come from: isolation from personal setup; no pasted rulebooks;
 
 ## 16. Verified, and not verified
 
-**Verified by tests that run the real cw code with a stand-in for `claude`** (`cd backend && uv run pytest`, 88 tests):
+**Verified by tests that run the real cw code with a stand-in for `claude`** (`cd backend && uv run pytest`, 89 tests):
 - a project created from an idea, planned, approved, built in two tasks, reviewed, committed once and merged by `cw done`, through the command line;
 - related tasks continue one worker session, another worker gets a new one and is told what happened;
 - a worker's question is answered by the planner; one the planner cannot answer goes to you and your reply reaches the worker;
@@ -344,7 +347,7 @@ Where the savings come from: isolation from personal setup; no pasted rulebooks;
 - Ctrl+C in the middle of a task list leaves the ticket blocked, and resume continues at the next task; a ticket left "in progress" by a killed process resumes too;
 - merge conflicts with the base are resolved and committed; a later review does not include the base's changes;
 - the PR is opened after the review even when findings are left; `cw review` commits nothing; a ticket from `--base develop` targets `develop`;
-- a check the ticket broke gets one fix round and is then reported, and in a task list a check still broken after that round stops the ticket, which resumes at that task; cw starts a project's containers before the worker and the checks once its compose file exists, and stops the ticket when they do not start; `cw fix` goes round again while the new review leaves comments, up to its cap, and stops after a round that changed nothing; a ticket without changes cannot open a PR; files the checks leave behind are reported;
+- a check the ticket broke gets one fix round and is then reported, and in a task list a check still broken after that round gets one fresh worker session started from the last attempt's reflection, and stops the ticket when it still fails, which resumes at that task; cw starts a project's containers before the worker and the checks once its compose file exists, and stops the ticket when they do not start; `cw fix` goes round again while the new review leaves comments, up to its cap, and stops after a round that changed nothing; a ticket without changes cannot open a PR; files the checks leave behind are reported;
 - the guard, the rules hook and the topic index; time limits kill a command and everything it started;
 - `cw fix` sends the open PR threads to the last worker, pushes a second commit, posts the worker's summary and resolves the threads; with no open threads it runs no agent;
 - `cw merge` refuses while a blocking finding is left or CI has not passed, and otherwise merges, fast-forwards the local base branch, closes the ticket and deletes the local branch;
@@ -391,6 +394,7 @@ Where the savings come from: isolation from personal setup; no pasted rulebooks;
 - Yao et al., *ReAct* ([arXiv:2210.03629](https://arxiv.org/abs/2210.03629)): the reason → act → observe loop inside every agent run.
 - Madaan et al., *Self-Refine* ([arXiv:2303.17651](https://arxiv.org/abs/2303.17651)) and Shinn et al., *Reflexion* ([arXiv:2303.11366](https://arxiv.org/abs/2303.11366)): feedback loops, the idea behind the reviewer → worker fix round, and why it's capped.
 - Jimenez et al., *SWE-bench* ([arXiv:2310.06770](https://arxiv.org/abs/2310.06770)) and Yang et al., *SWE-agent* ([arXiv:2405.15793](https://arxiv.org/abs/2405.15793)): how coding agents are evaluated.
+- Lindenbauer et al., *The Complexity Trap* ([arXiv:2508.21433](https://arxiv.org/abs/2508.21433)): dropping old tool outputs roughly halves an agent's cost and solves as many tasks as LLM summarization; the reason the back-off starts a fresh session.
 - Liu et al., *Lost in the Middle* ([arXiv:2307.03172](https://arxiv.org/abs/2307.03172)): long contexts are used less reliably, another reason for small hand-offs.
 
 **Reference docs**

@@ -328,6 +328,7 @@ def _worker(
                 files=actual_files,
                 handoff=worker_result.handoff,
                 project_notes=worker_result.project_notes,
+                reflection=worker_result.reflection,
             )
         )
         notes = project_memory.add_notes(project.path, worker_result.project_notes)
@@ -415,8 +416,8 @@ def _fix(settings: Settings, project: Project, ticket: Ticket, instruction: str)
     return _worker(settings, project, ticket, ticket.last_worker or FIRST_WORKER, instruction, None)
 
 
-def _checks_with_fixes(settings: Settings, project: Project, ticket: Ticket) -> None:
-    """Run the enforced checks; let the worker fix what it broke, then report instead of blocking."""
+def _checks_with_fixes(settings: Settings, project: Project, ticket: Ticket) -> list[tuple[str, str]]:
+    """Run the enforced checks; let the worker fix what it broke, then report and return what still fails."""
     failures = _failing_checks(project, ticket)
     rounds = 0
     while failures and rounds < project.profile.limits.max_fix_rounds:
@@ -426,6 +427,19 @@ def _checks_with_fixes(settings: Settings, project: Project, ticket: Ticket) -> 
         failures = _failing_checks(project, ticket)
     ticket.failing_checks = [command for command, _ in failures]
     _set_warning(ticket, FAILING_WARNING, ", ".join(f"`{command}`" for command in ticket.failing_checks) or None)
+    return failures
+
+
+def _back_off(
+    settings: Settings, project: Project, ticket: Ticket, task: Subtask, failures: list[tuple[str, str]]
+) -> list[tuple[str, str]]:
+    """Hand a task whose checks still fail to a fresh session of its worker, with the last attempt's reflection."""
+    last = ticket.work_log[-1] if ticket.work_log else None
+    reflection = (last.reflection or last.summary) if last else ""
+    logger.info("Task %s still fails; worker %s starts a fresh session from its reflection.", task.id, task.worker)
+    ticket.worker_sessions.pop(task.worker, None)
+    _worker(settings, project, ticket, task.worker, prompts.backoff_instruction(task, reflection, failures), task.id)
+    return _checks_with_fixes(settings, project, ticket)
 
 
 def _assign_workers(subtasks: list[Subtask], max_workers: int) -> None:
@@ -515,7 +529,11 @@ def _task_passes(settings: Settings, project: Project, ticket: Ticket) -> bool:
             return False
         if worker_result.status != WorkerStatus.DONE:
             raise AppException(AppErrorCode.AGENT_FAILED, f"Task {task.id} stopped: {worker_result.reason}")
-        _checks_with_fixes(settings, project, ticket)
+        failures = _checks_with_fixes(settings, project, ticket)
+        backoffs = 0
+        while failures and backoffs < project.profile.limits.max_backoff_rounds:
+            backoffs += 1
+            failures = _back_off(settings, project, ticket, task, failures)
         if ticket.failing_checks:
             failing = ", ".join(f"`{command}`" for command in ticket.failing_checks)
             raise AppException(
