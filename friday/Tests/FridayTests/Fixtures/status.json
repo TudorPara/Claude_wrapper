@@ -1,0 +1,80 @@
+[
+  {
+    "id": "261117-categories-k1l2",
+    "project": "expense-tracker",
+    "title": "Expense categories",
+    "status": "done",
+    "route": "planned",
+    "branch": "cw/261117-categories-k1l2",
+    "pr_url": null,
+    "updated_at": "2026-11-18T08:43:29.926286Z",
+    "running": false,
+    "archived": true,
+    "error": null
+  },
+  {
+    "id": "261118-cookie-auth-i9j0",
+    "project": "expense-tracker",
+    "title": "Cookie sessions for the web app",
+    "status": "blocked",
+    "route": "planned",
+    "branch": "cw/261118-cookie-auth-i9j0",
+    "pr_url": null,
+    "updated_at": "2026-11-18T08:43:29.925818Z",
+    "running": false,
+    "archived": false,
+    "error": "Task S1: `uv run pytest` still fails after the fix round."
+  },
+  {
+    "id": "261118-currency-g7h8",
+    "project": "expense-tracker",
+    "title": "Support more currencies",
+    "status": "needs_input",
+    "route": "planned",
+    "branch": "cw/261118-currency-g7h8",
+    "pr_url": null,
+    "updated_at": "2026-11-18T08:43:29.925378Z",
+    "running": false,
+    "archived": false,
+    "error": null
+  },
+  {
+    "id": "261118-budget-alerts-e5f6",
+    "project": "expense-tracker",
+    "title": "Warn me when a budget is almost spent",
+    "status": "awaiting_approval",
+    "route": "planned",
+    "branch": "cw/261118-budget-alerts-e5f6",
+    "pr_url": null,
+    "updated_at": "2026-11-18T08:43:29.924920Z",
+    "running": false,
+    "archived": false,
+    "error": null
+  },
+  {
+    "id": "261118-monthly-report-c3d4",
+    "project": "expense-tracker",
+    "title": "Monthly report endpoint",
+    "status": "pr_open",
+    "route": "planned",
+    "branch": "cw/261118-monthly-report-c3d4",
+    "pr_url": "https://github.com/example/expense-tracker/pull/4",
+    "updated_at": "2026-11-18T08:43:29.924385Z",
+    "running": false,
+    "archived": false,
+    "error": null
+  },
+  {
+    "id": "261118-csv-import-a1b2",
+    "project": "expense-tracker",
+    "title": "Import expenses from a CSV file",
+    "status": "in_progress",
+    "route": "planned",
+    "branch": "cw/261118-csv-import-a1b2",
+    "pr_url": null,
+    "updated_at": "2026-11-18T08:43:29.921858Z",
+    "running": false,
+    "archived": false,
+    "error": null
+  }
+]

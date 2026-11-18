@@ -1,5 +1,6 @@
 """Tickets live in cw's own folder (~/.cw/tickets/<project>/<id>.json), never inside a project repository."""
 
+import json
 import logging
 import os
 import re
@@ -18,6 +19,7 @@ TICKETS_DIR = "tickets"
 TICKET_SUFFIX = ".json"
 TEMPORARY_SUFFIX = ".tmp"
 MARKDOWN_SUFFIX = ".md"
+EVENTS_SUFFIX = ".events.jsonl"
 LOCK_FILE_NAME = ".lock"
 LOCK_SEPARATOR = " "
 ID_DATE_FORMAT = "%y%m%d"
@@ -56,6 +58,27 @@ def tickets_root() -> Path:
 def ticket_path(project: str, ticket_id: str) -> Path:
     """Return the ticket file."""
     return tickets_root() / project / f"{ticket_id}{TICKET_SUFFIX}"
+
+
+def events_path(project: str, ticket_id: str) -> Path:
+    """Return the file of the ticket's agent events, one JSON object per line, which FRIDAY follows live."""
+    return tickets_root() / project / f"{ticket_id}{EVENTS_SUFFIX}"
+
+
+def append_event(project: str, ticket_id: str, event: dict) -> None:
+    """Add one timestamped event to the ticket's event file."""
+    path = events_path(project, ticket_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as events:
+        events.write(json.dumps({"at": utc_now().isoformat(), **event}) + "\n")
+
+
+def read_events(project: str, ticket_id: str, last: int) -> list[dict]:
+    """Return the ticket's last events, oldest first; a ticket without runs has none."""
+    path = events_path(project, ticket_id)
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()[-last:] if line.strip()]
 
 
 def read_ticket(path: Path) -> Ticket:

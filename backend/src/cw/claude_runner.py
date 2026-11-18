@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
@@ -12,6 +13,7 @@ from cw.config import AgentRole, Project, Settings, conventions_path
 from cw.errors import AppErrorCode, AppException
 from cw.models import RunUsage, utc_now
 from cw.process import run_process
+from cw.tickets import append_event
 from cw.toolkit import load_agent, pinned_skills, pinned_topics, plugin_dir, skill_body
 
 logger = logging.getLogger(__name__)
@@ -20,8 +22,10 @@ STRUCTURED_OUTPUT_TOOL = "StructuredOutput"
 READ_ONLY_PERMISSION_MODE = "default"
 USAGE_LIMIT_STATUS = 429
 USAGE_LIMIT_HINTS = ("usage limit", "rate limit", "limit reached", "limit will reset")
+SESSION_LOST_HINT = "No conversation found with session ID"
 ORCHESTRATED_ENV = "CW_RUN"
-ISOLATED_SETTING_SOURCES = "project,local"
+ISOLATED_SETTING_SOURCES = "project"
+PROJECT_MCP_FILE = ".mcp.json"
 PROTECTED_PATHS_ENV = "CW_PROTECTED_PATHS"
 SHOWN_TOPICS_ENV = "CW_SHOWN_TOPICS"
 SECRET_ENV_PREFIXES = ("BITBUCKET__",)
@@ -33,6 +37,10 @@ ERROR_TAIL_CHARS = 2000
 RESULT_EVENT = "result"
 ASSISTANT_EVENT = "assistant"
 TOOL_USE_BLOCK = "tool_use"
+EVENT_START = "start"
+EVENT_TOOL = "tool"
+EVENT_DONE = "done"
+EVENT_ERROR = "error"
 TOOL_DETAIL_KEYS = ("file_path", "command", "pattern", "path")
 TOOL_DETAIL_MAX_CHARS = 100
 
@@ -130,8 +138,8 @@ def _event(line: str) -> dict | None:
     return event if isinstance(event, dict) else None
 
 
-def _log_tool_calls(agent_name: str, line: str) -> None:
-    """Log every tool the agent calls, as it happens, so a run can be followed live."""
+def _log_tool_calls(agent_name: str, line: str, record: Callable[[dict], None]) -> None:
+    """Log every tool the agent calls, as it happens, and record it in the ticket's events, so a run can be followed."""
     event = _event(line)
     if not event or event.get("type") != ASSISTANT_EVENT:
         return
@@ -140,7 +148,9 @@ def _log_tool_calls(agent_name: str, line: str) -> None:
             continue
         tool_input = block.get("input", {})
         detail = next((str(tool_input[key]) for key in TOOL_DETAIL_KEYS if key in tool_input), "")
-        logger.info("  %s · %s %s", agent_name, block.get("name"), detail[:TOOL_DETAIL_MAX_CHARS].replace("\n", " "))
+        detail = detail[:TOOL_DETAIL_MAX_CHARS].replace("\n", " ")
+        logger.info("  %s · %s %s", agent_name, block.get("name"), detail)
+        record({"kind": EVENT_TOOL, "tool": block.get("name"), "detail": detail})
 
 
 def _result_event(stdout: str) -> dict | None:
@@ -175,7 +185,9 @@ def _usage(data: dict, role: AgentRole, agent: str, model: str) -> RunUsage:
 
 def _raise_for_error(data: dict, usage: RunUsage) -> None:
     """Translate a failed CLI result into the matching error, keeping the tokens it used."""
-    message = str(data.get("result") or data.get("subtype") or "")
+    message = "; ".join(map(str, data.get("errors") or [])) or str(data.get("result") or data.get("subtype") or "")
+    if SESSION_LOST_HINT in message:
+        raise AppException(AppErrorCode.SESSION_LOST, message, usage)
     if data.get("api_error_status") == USAGE_LIMIT_STATUS or any(hint in message.lower() for hint in USAGE_LIMIT_HINTS):
         raise AppException(AppErrorCode.USAGE_LIMIT, message, usage)
     raise AppException(AppErrorCode.AGENT_FAILED, message, usage)
@@ -193,13 +205,70 @@ def run_agent[T: BaseModel](
     resume_session: str | None = None,
     files: list[str] | None = None,
     new_project: bool = False,
+    label: str = "",
 ) -> tuple[T, RunUsage]:
     """Run a toolkit agent headlessly and return its validated structured result and usage.
 
     `files` are the changed files of a review; the rules that cover them are added to the system prompt.
     `new_project` adds the rules for starting a project. Both are the same for every run of a session,
     so the system prompt of a resumed session never changes and its cache stays valid.
+    `label` names the run in the ticket's events (W2 · S3, a reviewer); every start, tool call, end and failure is
+    recorded there.
     """
+    label = label or agent_name
+
+    def record(event: dict) -> None:
+        append_event(project.name, ticket_id, {"agent": agent_name, "role": role.value, "label": label, **event})
+
+    try:
+        result, usage = _run_agent(
+            settings,
+            project,
+            agent_name,
+            role,
+            prompt,
+            cwd,
+            output_model,
+            ticket_id,
+            resume_session,
+            files,
+            new_project,
+            record,
+        )
+    except AppException as error:
+        if error.usage:
+            error.usage.label = label
+        record({"kind": EVENT_ERROR, "message": str(error)[:ERROR_TAIL_CHARS]})
+        raise
+    usage.label = label
+    record(
+        {
+            "kind": EVENT_DONE,
+            "turns": usage.num_turns,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "cost_usd": usage.cost_usd,
+            "session_id": usage.session_id,
+        }
+    )
+    return result, usage
+
+
+def _run_agent[T: BaseModel](
+    settings: Settings,
+    project: Project,
+    agent_name: str,
+    role: AgentRole,
+    prompt: str,
+    cwd: Path,
+    output_model: type[T],
+    ticket_id: str,
+    resume_session: str | None,
+    files: list[str] | None,
+    new_project: bool,
+    record: Callable[[dict], None],
+) -> tuple[T, RunUsage]:
+    """Run the agent once and parse its result; `run_agent` records the run's events around it."""
     agent = load_agent(settings, agent_name)
     model = _model_for(project, role)
     max_turns = _max_turns_for(project, role)
@@ -239,23 +308,27 @@ def run_agent[T: BaseModel](
             "--setting-sources",
             ISOLATED_SETTING_SOURCES,
         ]
+        if (cwd / PROJECT_MCP_FILE).is_file():
+            command += ["--mcp-config", str(cwd / PROJECT_MCP_FILE)]
         for plugin in _toolkit_plugins(settings, project):
             command += ["--plugin-dir", str(plugin_dir(settings, plugin))]
         if resume_session:
             command += ["--resume", resume_session]
         logger.info("▶ %s (%s) on %s", agent.name, model, ticket_id)
+        record({"kind": EVENT_START, "model": model, "resumed": bool(resume_session)})
         _, stdout, stderr = run_process(
             command,
             cwd,
             _environment(project, ticket_id, shown_topics),
             project.profile.limits.agent_timeout_minutes,
             stdin_text=prompt,
-            on_line=lambda line: _log_tool_calls(agent.name, line),
+            on_line=lambda line: _log_tool_calls(agent.name, line, record),
         )
     data = _result_event(stdout)
     if data is None:
         logger.error("%s printed no result; stderr: %s", agent.name, stderr[-ERROR_TAIL_CHARS:])
-        raise AppException(AppErrorCode.AGENT_FAILED, stderr[-ERROR_TAIL_CHARS:])
+        code = AppErrorCode.SESSION_LOST if SESSION_LOST_HINT in stderr else AppErrorCode.AGENT_FAILED
+        raise AppException(code, stderr[-ERROR_TAIL_CHARS:])
     usage = _usage(data, role, agent.name, model)
     if data.get("is_error"):
         _raise_for_error(data, usage)

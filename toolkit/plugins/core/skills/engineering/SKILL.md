@@ -20,8 +20,8 @@ The two rules above all others:
 Working rules:
 
 - For complex or uncertain work, reason step by step before writing code: restate the task, list the rules and files involved, name what is unknown, then choose the simplest correct option.
-- Do not hallucinate. If a file, package version or requirement is unknown, read it or check installed versions (`uv pip show <packages>`) before relying on library internals.
-- Verify by running: lint, tests, and where possible the app itself. Say plainly what was not verified.
+- Do not hallucinate. If a file, package version or requirement is unknown, read it (the code, the lockfile, the installed package's source) before relying on library internals.
+- Verify by running the lint and test commands you have. Say plainly what was not verified.
 - Never print or commit `.env`. Open or edit it only when the task adds or changes a setting, and keep `.env.example` in step.
 - Code must already satisfy every rule here; reviewers have flagged AI-written code applied as-is.
 

@@ -78,9 +78,11 @@ class BitbucketHost:
             return "No builds reported."
         return "\n".join(f"{status.get('state')}\t{status.get('name')}" for status in statuses)
 
-    def ci_passed(self, number: int, sha: str) -> bool:
-        """Return whether every build reported on the commit succeeded."""
+    def ci_passed(self, number: int, sha: str, checks_expected: bool) -> bool:
+        """Return whether every build reported on the commit succeeded; none reported passes only without CI."""
         statuses = self._request("GET", f"/commit/{sha}/statuses").get("values", [])
+        if not statuses:
+            return not checks_expected
         return all(status.get("state") == SUCCESSFUL_STATE for status in statuses)
 
     def open_threads(self, number: int) -> list[PullRequestThread]:
@@ -105,7 +107,15 @@ class BitbucketHost:
         """Resolve an inline comment and its replies."""
         self._request("POST", f"/pullrequests/{number}/comments/{thread_id}/resolve")
 
-    def merge(self, number: int, branch: str, message: str) -> None:
-        """Squash-merge the pull request and close its source branch."""
+    def merge(self, number: int, branch: str, message: str, sha: str) -> None:
+        """Squash-merge the pull request and close its source branch, refusing when its head is no longer `sha`.
+
+        Bitbucket's merge call takes no expected head, so the head is compared just before it.
+        """
+        head = self._request("GET", f"/pullrequests/{number}")["source"]["commit"]["hash"]
+        if not sha.startswith(head):
+            raise AppException(
+                AppErrorCode.GIT_HOST_FAILED, f"Pull request {number} is at {head}, not at the checked {sha}."
+            )
         payload = {"merge_strategy": SQUASH_STRATEGY, "close_source_branch": True, "message": message}
         self._request("POST", f"/pullrequests/{number}/merge", payload)

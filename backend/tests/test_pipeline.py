@@ -1,15 +1,26 @@
+import json
 import os
 from pathlib import Path
 
 import pytest
 from conftest import FakeAgents, FakeHost, answer, git, make_repository, usage
 
-from cw import onboarding, pipeline, reports
+from cw import onboarding, pipeline, prompts, reports
 from cw.config import AgentRole, get_settings, write_settings
 from cw.errors import AppErrorCode, AppException
 from cw.git_hosts.base import PullRequestThread
-from cw.models import ReviewComment, ReviewerResult, Severity, Step, TicketStatus, Verdict, WorkerResult, WorkerStatus
-from cw.tickets import find_ticket, ticket_path, write_ticket
+from cw.models import (
+    PlannerResult,
+    ReviewComment,
+    ReviewerResult,
+    Severity,
+    Step,
+    Subtask,
+    TicketStatus,
+    WorkerResult,
+    WorkerStatus,
+)
+from cw.tickets import events_path, find_ticket, ticket_path, write_ticket
 
 WORKER = AgentRole.WORKER
 
@@ -139,13 +150,30 @@ def test_a_session_that_is_gone_is_replaced_by_a_fresh_one_with_the_whole_ticket
 
     def lost_session(prompt: str, cwd: Path, call: int) -> WorkerResult:
         if agents.resumed[-1][1] is not None:
-            raise AppException(AppErrorCode.AGENT_FAILED, "No conversation found")
+            raise AppException(AppErrorCode.SESSION_LOST, "No conversation found")
         return agents.default_worker(prompt, cwd, call)
 
     agents.worker = lost_session
     again = pipeline.follow_up(ticket.id, "rename it")
     assert again.status == TicketStatus.READY
     assert agents.prompts_for(WORKER)[-1].startswith("# add a file\n\n## Request")
+
+
+def test_a_resumed_run_that_fails_keeps_its_session_and_starts_no_fresh_run(
+    local_repository: Path, agents: FakeAgents
+) -> None:
+    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
+    session = ticket.worker_sessions["W1"]
+
+    def crash(prompt: str, cwd: Path, call: int) -> WorkerResult:
+        raise AppException(AppErrorCode.AGENT_FAILED, "printed no result")
+
+    agents.worker = crash
+    with pytest.raises(AppException, match="printed no result"):
+        pipeline.follow_up(ticket.id, "rename it")
+    stored = find_ticket(ticket.id)
+    assert len(agents.prompts_for(WORKER)) == 2
+    assert stored.status == TicketStatus.BLOCKED and stored.worker_sessions["W1"] == session
 
 
 def test_a_broken_check_gets_one_fix_round_then_is_reported(local_repository: Path, agents: FakeAgents) -> None:
@@ -265,12 +293,17 @@ def test_the_pull_request_is_opened_after_the_review_even_when_findings_are_left
 ) -> None:
     finding = ReviewComment(path="work_1.txt", line=1, severity=Severity.BLOCKING, body="wrong")
     nit = ReviewComment(path="work_1.txt", line=2, severity=Severity.MINOR, body="rename it")
-    agents.reviewer = lambda prompt: ReviewerResult(verdict=Verdict.CHANGES, summary="no", comments=[finding, nit])
+    invented = ReviewComment(path="nowhere.py", line=1, severity=Severity.BLOCKING, body="made up")
+    agents.reviewer = lambda prompt: ReviewerResult(
+        summary="no", comments=[] if "still open" in prompt else [finding, nit, invented]
+    )
     ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
     opened = pipeline.open_pull_request(ticket.id)
     assert opened.status == TicketStatus.PR_OPEN and opened.pr_number == 1
     assert "Review: 1 blocking findings left after the fix round." in opened.warnings
     assert len(agents.prompts_for(AgentRole.REVIEWER)) == 2 and host.reviews == 1
+    assert "- F1 `work_1.txt:1` wrong" in agents.prompts_for(AgentRole.REVIEWER)[1]
+    assert [(c.path, c.line) for c in opened.reviews[0].comments] == [("work_1.txt", 1), ("work_1.txt", 1)]
     fix_prompt = agents.prompts_for(WORKER)[1]
     assert fix_prompt.startswith("## Address these review findings, and only these")
     assert "(blocking) wrong" in fix_prompt and "(minor) rename it" in fix_prompt
@@ -319,10 +352,12 @@ def test_conflicts_with_the_base_are_resolved_and_later_reviews_skip_the_base_ch
     assert git(remote_repository, "rev-list", "--merges", "--count", "HEAD") == "1"
     assert git(remote_repository, "status", "--porcelain") == ""
     assert host.reviews == 1
+    conflict_review = agents.prompts_for(AgentRole.REVIEWER)[1]
+    assert "+ticket and main" in conflict_review and "g.txt" not in conflict_review
 
     pipeline.follow_up(ticket.id, "one more file")
     pipeline.open_pull_request(ticket.id)
-    second_review = agents.prompts_for(AgentRole.REVIEWER)[1]
+    second_review = agents.prompts_for(AgentRole.REVIEWER)[2]
     assert "work_3.txt" in second_review and "g.txt" not in second_review
     assert host.reviews == 2
 
@@ -374,7 +409,7 @@ def test_cw_starts_the_projects_containers_before_the_worker_and_the_checks(
     _use_compose_file(local_repository, "dev/docker-compose.yml", commit=True)
     pipeline.start_ticket("demo", "add a file", plan_first=False)
     lines = calls.read_text().splitlines()
-    assert len(lines) == 2 and set(lines) == {"compose --file dev/docker-compose.yml up --detach --wait"}
+    assert len(lines) == 3 and set(lines) == {"compose --file dev/docker-compose.yml up --detach --wait"}
 
 
 def test_no_container_is_started_until_the_compose_file_exists(
@@ -394,6 +429,8 @@ def test_containers_that_do_not_start_stop_the_ticket_with_dockers_reason(
     with pytest.raises(AppException, match="Could not start the containers in compose.yml"):
         pipeline.start_ticket("demo", "add a file", plan_first=False)
     assert agents.prompts_for(WORKER) == []
+    assert git(local_repository, "branch", "--show-current") == "main"
+    assert "cw/" not in git(local_repository, "branch", "--list")
 
 
 def test_files_the_checks_leave_behind_are_reported_on_the_ticket(workspace: Path, agents: FakeAgents) -> None:
@@ -571,37 +608,31 @@ def _pull_request_fix_prompts(agents: FakeAgents) -> list[str]:
     return [prompt for prompt in agents.prompts_for(WORKER) if prompt.startswith("## Address these pull request")]
 
 
-def test_fix_keeps_going_while_the_new_review_leaves_comments_and_stops_when_none_are_left(
+def test_fix_posts_each_new_review_as_a_comment_and_stops_when_no_blocking_finding_is_open(
     remote_repository: Path, agents: FakeAgents, host: FakeHost
 ) -> None:
     ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
     pipeline.open_pull_request(ticket.id)
-    reviews = len(agents.prompts_for(AgentRole.REVIEWER))
     nit = ReviewComment(path="work_1.txt", line=1, severity=Severity.MINOR, body="rename it")
-
-    def one_more_finding(prompt: str) -> ReviewerResult:
-        first_fix_review = len(agents.prompts_for(AgentRole.REVIEWER)) == reviews + 1
-        return ReviewerResult(verdict=Verdict.APPROVE, summary="ok", comments=[nit] if first_fix_review else [])
-
-    agents.reviewer = one_more_finding
+    agents.reviewer = lambda prompt: ReviewerResult(summary="ok", comments=[nit])
     host.threads = [PullRequestThread(id="T1", path="work_1.txt", line=1, body="alice: be stricter")]
     fixed = pipeline.fix_pull_request(ticket.id)
-    assert len(_pull_request_fix_prompts(agents)) == 2 and "rename it" in _pull_request_fix_prompts(agents)[1]
-    assert host.open_threads(1) == [] and host.resolved == ["T1", "R2"]
-    assert not any(warning.startswith("Pull request:") for warning in fixed.warnings)
+    assert len(_pull_request_fix_prompts(agents)) == 1 and host.resolved == ["T1"]
+    assert [thread.id for thread in host.threads] == ["T1"]
+    assert "- `work_1.txt:1` (minor) rename it" in host.summaries[-2]
+    assert fixed.open_findings == []
 
 
-def test_fix_stops_at_its_round_cap_and_says_what_is_left(
+def test_fix_goes_round_again_while_a_blocking_finding_stays_open_up_to_its_cap(
     remote_repository: Path, agents: FakeAgents, host: FakeHost
 ) -> None:
     ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
     pipeline.open_pull_request(ticket.id)
-    nit = ReviewComment(path="work_1.txt", line=1, severity=Severity.MINOR, body="again")
-    agents.reviewer = lambda prompt: ReviewerResult(verdict=Verdict.APPROVE, summary="ok", comments=[nit])
+    finding = ReviewComment(path="work_1.txt", line=1, severity=Severity.BLOCKING, body="still wrong")
+    agents.reviewer = lambda prompt: ReviewerResult(summary="no", comments=[] if "still open" in prompt else [finding])
     host.threads = [PullRequestThread(id="T1", path="work_1.txt", line=1, body="alice: be stricter")]
     fixed = pipeline.fix_pull_request(ticket.id)
-    assert len(_pull_request_fix_prompts(agents)) == 3
-    assert f"Pull request: 1 comment(s) still open on {fixed.pr_url} after cw fix." in fixed.warnings
+    assert len(_pull_request_fix_prompts(agents)) == 3 and len(fixed.open_findings) == 1
 
 
 def test_fix_stops_after_a_round_in_which_the_worker_changed_nothing(
@@ -609,12 +640,32 @@ def test_fix_stops_after_a_round_in_which_the_worker_changed_nothing(
 ) -> None:
     ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
     pipeline.open_pull_request(ticket.id)
-    nit = ReviewComment(path="work_1.txt", line=1, severity=Severity.MINOR, body="again")
-    agents.reviewer = lambda prompt: ReviewerResult(verdict=Verdict.APPROVE, summary="ok", comments=[nit])
+    finding = ReviewComment(path="work_1.txt", line=1, severity=Severity.BLOCKING, body="wrong")
+    stored = find_ticket(ticket.id)
+    stored.open_findings = [finding.model_copy(update={"id": "F9"})]
+    write_ticket(stored)
     agents.worker = lambda prompt, cwd, call: answer(WorkerStatus.DONE, "already right")
-    host.threads = [PullRequestThread(id="T1", path="work_1.txt", line=1, body="alice: be stricter")]
     pipeline.fix_pull_request(ticket.id)
-    assert len(_pull_request_fix_prompts(agents)) == 1 and "T1" in host.resolved
+    assert len(_pull_request_fix_prompts(agents)) == 1
+
+
+def test_fix_sends_the_open_blocking_findings_and_a_review_that_says_they_are_fixed_closes_them(
+    remote_repository: Path, agents: FakeAgents, host: FakeHost
+) -> None:
+    finding = ReviewComment(path="work_1.txt", line=1, severity=Severity.BLOCKING, body="wrong")
+    agents.reviewer = lambda prompt: ReviewerResult(summary="no", comments=[] if "still open" in prompt else [finding])
+    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
+    pipeline.open_pull_request(ticket.id)
+    host.threads = []
+    assert [f.id for f in find_ticket(ticket.id).open_findings] == ["F1"]
+
+    agents.reviewer = lambda prompt: ReviewerResult(summary="fixed", comments=[], resolved=["F1"])
+    fixed = pipeline.fix_pull_request(ticket.id)
+    assert (
+        "Blocking findings of the last review, still open:\n\n- `work_1.txt:1` wrong"
+        in (_pull_request_fix_prompts(agents)[0])
+    )
+    assert fixed.open_findings == [] and not any(w.startswith("Review:") for w in fixed.warnings)
 
 
 def test_fix_without_open_comments_runs_no_agent(remote_repository: Path, agents: FakeAgents, host: FakeHost) -> None:
@@ -629,19 +680,36 @@ def test_merge_refuses_until_ci_passed_and_no_blocking_finding_is_left(
     remote_repository: Path, agents: FakeAgents, host: FakeHost
 ) -> None:
     finding = ReviewComment(path="work_1.txt", line=1, severity=Severity.BLOCKING, body="wrong")
-    agents.reviewer = lambda prompt: ReviewerResult(verdict=Verdict.CHANGES, summary="no", comments=[finding])
+    agents.reviewer = lambda prompt: ReviewerResult(summary="fine", comments=[finding])
     ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
     pipeline.open_pull_request(ticket.id)
     with pytest.raises(AppException, match="blocking review finding"):
         pipeline.merge_pull_request(ticket.id)
 
     stored = find_ticket(ticket.id)
-    stored.reviews = []
+    stored.open_findings = []
     write_ticket(stored)
     host.ci = False
     with pytest.raises(AppException, match="CI has not passed"):
         pipeline.merge_pull_request(ticket.id)
     assert host.merged == [] and find_ticket(ticket.id).status == TicketStatus.PR_OPEN
+
+
+def test_merge_expects_ci_checks_when_the_branch_has_ci_config(
+    remote_repository: Path, agents: FakeAgents, host: FakeHost
+) -> None:
+    def adds_a_workflow(prompt: str, cwd: Path, call: int) -> WorkerResult:
+        (cwd / ".github" / "workflows").mkdir(parents=True)
+        (cwd / ".github" / "workflows" / "ci.yml").write_text("on: pull_request\n")
+        return answer(WorkerStatus.DONE, "added CI")
+
+    agents.worker = adds_a_workflow
+    ticket = pipeline.start_ticket("demo", "add CI", plan_first=False)
+    pipeline.open_pull_request(ticket.id)
+    host.ci = False
+    with pytest.raises(AppException, match="not reported yet"):
+        pipeline.merge_pull_request(ticket.id)
+    assert host.checks_expected == [True] and host.merged == []
 
 
 def test_merge_squash_merges_on_the_host_closes_the_ticket_and_deletes_the_local_branch(
@@ -650,18 +718,151 @@ def test_merge_squash_merges_on_the_host_closes_the_ticket_and_deletes_the_local
     ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
     pipeline.open_pull_request(ticket.id)
 
-    def squash_on_the_host(number: int, branch: str, message: str) -> None:
-        host.merged.append((number, branch, message))
+    def squash_on_the_host(number: int, branch: str, message: str, sha: str) -> None:
+        host.merged.append((number, branch, message, sha))
         git(workspace, "clone", str(workspace / "origin.git"), "host")
         git(workspace / "host", "merge", "--squash", f"origin/{branch}")
         git(workspace / "host", "commit", "-m", message)
         git(workspace / "host", "push", "origin", "main")
 
     host.merge = squash_on_the_host
+    pushed = git(remote_repository, "rev-parse", ticket.branch)
     merged = pipeline.merge_pull_request(ticket.id)
-    assert host.merged == [(1, ticket.branch, "feat: work")]
+    assert host.merged == [(1, ticket.branch, "feat: work", pushed)] and host.checks_expected == [False]
     assert merged.status == TicketStatus.DONE
     assert git(remote_repository, "branch", "--show-current") == "main"
     assert ticket.branch not in git(remote_repository, "branch", "--list")
     assert git(remote_repository, "rev-parse", "main") == git(workspace / "origin.git", "rev-parse", "main")
     assert (remote_repository / "work_1.txt").exists()
+
+
+def test_a_conflict_resolution_is_checked_and_reviewed_before_it_is_pushed(
+    remote_repository: Path, workspace: Path, agents: FakeAgents, host: FakeHost
+) -> None:
+    def breaks_while_resolving(prompt: str, cwd: Path, call: int) -> WorkerResult:
+        if call == 1:
+            (cwd / "f.txt").write_text("ticket\n")
+            return answer(WorkerStatus.DONE, "changed f", files=["f.txt"])
+        if "Resolve merge conflicts" in prompt:
+            (cwd / "BROKEN").write_text("x")
+        if prompt.startswith("## Fix the failing checks"):
+            (cwd / "BROKEN").unlink()
+        return agents.default_worker(prompt, cwd, call)
+
+    agents.worker = breaks_while_resolving
+    ticket = pipeline.start_ticket("demo", "change f", plan_first=False)
+    git(workspace, "clone", str(workspace / "origin.git"), "teammate")
+    (workspace / "teammate" / "f.txt").write_text("main\n")
+    git(workspace / "teammate", "commit", "-am", "teammate")
+    git(workspace / "teammate", "push", "origin", "main")
+
+    opened = pipeline.open_pull_request(ticket.id)
+    worker_prompts = agents.prompts_for(WORKER)
+    assert "Resolve merge conflicts" in worker_prompts[1] and worker_prompts[2].startswith("## Fix the failing")
+    assert len(agents.prompts_for(AgentRole.REVIEWER)) == 2 and opened.failing_checks == []
+    assert not (remote_repository / "BROKEN").exists()
+    assert git(remote_repository, "status", "--porcelain") == ""
+
+
+def test_a_blocking_finding_stays_open_when_a_later_review_sees_only_unrelated_work(
+    remote_repository: Path, agents: FakeAgents, host: FakeHost
+) -> None:
+    finding = ReviewComment(path="work_1.txt", line=1, severity=Severity.BLOCKING, body="SQL injection")
+    agents.reviewer = lambda prompt: ReviewerResult(summary="no", comments=[] if "still open" in prompt else [finding])
+    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
+    pipeline.review(ticket.id)
+    pipeline.follow_up(ticket.id, "an unrelated change")
+    pipeline.open_pull_request(ticket.id)
+    assert "SQL injection" in agents.prompts_for(AgentRole.REVIEWER)[-1]
+    with pytest.raises(AppException, match="1 blocking review finding"):
+        pipeline.merge_pull_request(ticket.id)
+
+
+def test_plan_feedback_resumes_the_planner_with_only_the_feedback(local_repository: Path, agents: FakeAgents) -> None:
+    ticket = pipeline.start_ticket("demo", "two steps", plan_first=True)
+    pipeline.follow_up(ticket.id, "use one worker")
+    first, second = agents.prompts_for(AgentRole.PLANNER)
+    assert "## Request" in first and "## Request" not in second and "You have up to" not in second
+    assert "use one worker" in second and "## Constraints" in second
+    assert agents.resumed[-1] == (AgentRole.PLANNER, ticket.planner_session)
+
+
+def test_a_planner_that_still_asks_after_its_last_round_is_told_to_plan_and_never_leaves_an_empty_plan(
+    local_repository: Path, agents: FakeAgents
+) -> None:
+    nothing = {"split": [], "options_considered": "", "files": [], "answers": []}
+    task = Subtask(id="S1", title="do it", instructions="do it", files=[])
+
+    def asks_until_told(prompt: str) -> PlannerResult:
+        if "Write the plan now" in prompt:
+            return PlannerResult(**nothing, questions=[], plan="the plan", subtasks=[task])
+        return PlannerResult(**nothing, questions=["which colour?"], plan="", subtasks=[])
+
+    agents.planner = asks_until_told
+    ticket = pipeline.start_ticket("demo", "paint it", plan_first=True)
+    assert ticket.status == TicketStatus.NEEDS_INPUT and ticket.questions == ["which colour?"]
+    planned = pipeline.follow_up(ticket.id, "blue")
+    assert planned.status == TicketStatus.AWAITING_APPROVAL and planned.plan == "the plan"
+    assert len(agents.prompts_for(AgentRole.PLANNER)) == 3
+
+    agents.planner = lambda prompt: PlannerResult(**nothing, questions=[], plan="", subtasks=[])
+    empty = pipeline.follow_up(ticket.id, "start over")
+    assert empty.status == TicketStatus.NEEDS_INPUT and empty.questions == [prompts.NO_PLAN]
+
+
+def test_a_review_killed_without_cleanup_resumes_as_a_review_and_opens_no_pull_request(
+    remote_repository: Path, agents: FakeAgents, host: FakeHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
+
+    def killed(*arguments: object) -> None:
+        raise SystemExit(1)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(pipeline, "_review", killed)
+        with pytest.raises(SystemExit):
+            pipeline.review(ticket.id)
+    stale = find_ticket(ticket.id)
+    assert (stale.status, stale.paused_step) == (TicketStatus.IN_REVIEW, Step.REVIEW)
+    resumed = pipeline.resume(ticket.id)
+    assert resumed.status == TicketStatus.READY and resumed.pr_number is None and host.targets == []
+
+
+def test_split_creates_paused_tickets_without_running_agents_and_abandons_the_original_last(
+    local_repository: Path, agents: FakeAgents
+) -> None:
+    nothing = {"questions": [], "plan": "", "options_considered": "", "subtasks": [], "files": [], "answers": []}
+    agents.planner = lambda prompt: PlannerResult(**nothing, split=["add A", "add B"])
+    ticket = pipeline.start_ticket("demo", "add A and B, each in its own PR", plan_first=True)
+    created = pipeline.split_ticket(ticket.id)
+    assert [(t.status, t.paused_step) for t in created] == [(TicketStatus.PAUSED, Step.PLAN)] * 2
+    assert all(t.previous_branch == "main" for t in created) and agents.prompts_for(WORKER) == []
+    assert find_ticket(ticket.id).status == TicketStatus.ABANDONED
+    assert git(local_repository, "branch", "--show-current") == "main"
+
+    agents.planner = None
+    planned = pipeline.resume(created[0].id)
+    assert planned.status == TicketStatus.AWAITING_APPROVAL
+
+
+def test_a_ticket_adds_at_most_five_notes_to_claude_md(local_repository: Path, agents: FakeAgents) -> None:
+    def three_notes(prompt: str, cwd: Path, call: int) -> WorkerResult:
+        (cwd / f"app_{call}.py").write_text("x = 1\n")
+        notes = [f"Note {call}.{number}." for number in range(3)]
+        return answer(WorkerStatus.DONE, "added app", project_notes=notes)
+
+    agents.worker = three_notes
+    ticket = pipeline.start_ticket("demo", "two steps", plan_first=True)
+    pipeline.approve(ticket.id)
+    written = (local_repository / "CLAUDE.md").read_text()
+    assert written.count("- Note ") == 5 and "Note 2.1." in written and "Note 2.2." not in written
+
+
+def test_worker_runs_are_labelled_with_worker_and_task_and_each_check_is_an_event(
+    local_repository: Path, agents: FakeAgents
+) -> None:
+    ticket = pipeline.start_ticket("demo", "two steps", plan_first=True)
+    pipeline.approve(ticket.id)
+    assert agents.labels == ["planner", "W1 · S1", "W1 · S2"]
+    events = [json.loads(line) for line in events_path("demo", ticket.id).read_text().splitlines()]
+    assert {event["kind"] for event in events} == {"check"} and all(event["passed"] for event in events)

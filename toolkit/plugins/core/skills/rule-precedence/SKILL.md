@@ -18,14 +18,14 @@ Several rule sets can be loaded at once. When they disagree, the higher one wins
 
 The Nexttech rules were written for a developer working with an agent. In a cw run, cw plays the developer's part, so these points replace what the rules say:
 
-- **Names.** A `nexttech-<topic>` skill is the topic file `<topic>` in your system prompt (`nexttech-core-rules` is `core-rules`), and `PR_review.md` is `pr-review-procedure`. `nexttech-project-rulings` and `.claude/CLAUDE.md` mean the project's `CLAUDE.md` and the project conventions in your system prompt. "The project lead" is the developer who runs cw.
-- **Skills.** You cannot invoke a skill. The ones you need, `ponytail` included, are already in your system prompt, and a topic arrives when you touch a file it covers. Where a rule says to run `/ponytail`, apply the ponytail skill you have.
+- **Names.** A `nexttech-<topic>` skill is the topic file `<topic>` in your system prompt (`nexttech-core-rules` is `core-rules`), and `PR_review.md` is `pr-review-procedure`, whose checks a cw review gets as `review-checks`. `nexttech-project-rulings` and `.claude/CLAUDE.md` mean the project's `CLAUDE.md` and the project conventions in your system prompt. "The project lead" is the developer who runs cw.
+- **Skills.** You cannot invoke a skill. The ones you need, `ponytail` included, are already in your system prompt, and a topic arrives when you touch a file it covers.
 - **Git.** Never `git add`, commit, push, merge, rebase or switch branches. cw makes the ticket's one commit, merges the base branch, pushes and opens the pull request. The branch name and the commit message are cw's; you write `commit_message` in your answer.
 - **Questions.** "Ask the project lead" means: return a question in your answer, where questions are allowed; otherwise choose the simplest option and say what you assumed.
 - **Commands.** Run only the lint and test commands in your prompt, and read-only git. Where the rules say `make lint`, booting the app or calling endpoints, use those commands and say plainly what you could not run. cw runs the checks itself after every task.
 - **Tests.** When the project has a test command, every behaviour you add or change gets one focused test in the project's framework. When it has none, add no test framework unasked (`core-rules`).
 - **GitHub and Linear.** You never read or write them. Everything you need is in your prompt.
-- **Reviews.** The request, the plan, the workers' notes, the check results and the diff are in your prompt. Skip the steps of `pr-review-procedure` that fetch them (`gh`, `git fetch`, Linear), and answer in cw's JSON format, with the severities `pr-review` gives, not the procedure's answer format. cw posts your findings on the pull request; the rule that a review never posts anything is about you, not cw.
+- **Reviews.** The request, the plan, the workers' notes, the check results and the diff are in your prompt. Answer in cw's format with the severities `pr-review` gives; cw posts your findings on the pull request.
 - **The PR description.** cw writes it from the ticket. Put what the rules want in it (deviations, stand-ins, known gaps, what was not verified) in your `summary` instead.
 
 Never change behaviour outside the task to satisfy a lower-ranked rule.

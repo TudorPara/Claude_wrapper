@@ -14,7 +14,6 @@ from cw.models import (
     ReviewerResult,
     RunUsage,
     Subtask,
-    Verdict,
     WorkerResult,
     WorkerStatus,
     utc_now,
@@ -55,10 +54,10 @@ class FakeAgents:
         self.prompts: list[tuple[AgentRole, str]] = []
         self.resumed: list[tuple[AgentRole, str | None]] = []
         self.review_files: list[list[str] | None] = []
+        self.labels: list[str] = []
         self.worker: Callable[[str, Path, int], WorkerResult] = self.default_worker
-        self.reviewer: Callable[[str], ReviewerResult] = lambda prompt: ReviewerResult(
-            verdict=Verdict.APPROVE, summary="fine", comments=[]
-        )
+        self.reviewer: Callable[[str], ReviewerResult] = lambda prompt: ReviewerResult(summary="fine", comments=[])
+        self.planner: Callable[[str], PlannerResult] | None = None
         self.task_workers = ["W1", "W1"]
         self.planner_answers = ["use the settings value"]
 
@@ -75,14 +74,17 @@ class FakeAgents:
 
     def run(
         self, settings, project, agent_name, role, prompt, cwd, output_model, ticket_id, resume_session=None,
-        files=None, new_project=False,
+        files=None, new_project=False, label="",
     ):  # fmt: skip
         self.prompts.append((role, prompt))
+        self.labels.append(label or agent_name)
         self.resumed.append((role, resume_session))
         session = resume_session or f"{role.value}-{len(self.resumed)}"
         if role == AgentRole.WORKER:
             return self.worker(prompt, cwd, len(self.prompts_for(role))), usage(role, session)
         nothing = {"questions": [], "split": [], "plan": "", "options_considered": "", "subtasks": [], "files": []}
+        if role == AgentRole.PLANNER and self.planner:
+            return self.planner(prompt), usage(role, session)
         if role == AgentRole.PLANNER and "## Questions from worker" in prompt:
             return PlannerResult(**nothing, answers=self.planner_answers), usage(role, session)
         if role == AgentRole.PLANNER:
@@ -104,7 +106,8 @@ class FakeHost:
         self.threads: list[PullRequestThread] = []
         self.resolved: list[str] = []
         self.ci = True
-        self.merged: list[tuple[int, str, str]] = []
+        self.checks_expected: list[bool] = []
+        self.merged: list[tuple[int, str, str, str]] = []
 
     def create_pull_request(self, branch: str, base_branch: str, title: str, body: str) -> PullRequest:
         self.targets.append(base_branch)
@@ -117,7 +120,8 @@ class FakeHost:
             PullRequestThread(id=f"R{len(self.threads) + 1}", path=c.path, line=c.line, body=c.body) for c in comments
         ]
 
-    def ci_passed(self, number: int, sha: str) -> bool:
+    def ci_passed(self, number: int, sha: str, checks_expected: bool) -> bool:
+        self.checks_expected.append(checks_expected)
         return self.ci
 
     def open_threads(self, number: int) -> list[PullRequestThread]:
@@ -126,8 +130,8 @@ class FakeHost:
     def resolve_thread(self, number: int, thread_id: str) -> None:
         self.resolved.append(thread_id)
 
-    def merge(self, number: int, branch: str, message: str) -> None:
-        self.merged.append((number, branch, message))
+    def merge(self, number: int, branch: str, message: str, sha: str) -> None:
+        self.merged.append((number, branch, message, sha))
 
 
 @pytest.fixture
@@ -143,6 +147,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     config = json.loads(resources.files("cw").joinpath("config.example.json").read_text())
     config["toolkit"]["path"] = str(TOOLKIT)
     config["stacks"]["python"]["commands"] = {"lint": LINT_COMMAND, "test": TEST_COMMAND}
+    config["defaults"]["limits"] |= {"max_review_rounds": 1, "max_fix_rounds": 1}
     (home / "config.json").write_text(json.dumps(config))
     get_settings.cache_clear()
     yield tmp_path

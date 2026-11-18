@@ -1,0 +1,199 @@
+{
+  "id": "261118-csv-import-a1b2",
+  "project": "expense-tracker",
+  "title": "Import expenses from a CSV file",
+  "status": "in_progress",
+  "route": "planned",
+  "branch": "cw/261118-csv-import-a1b2",
+  "base_branch": "origin/main",
+  "target_branch": "main",
+  "previous_branch": "main",
+  "base_sha": "0000000000000000000000000000000000000000",
+  "owner": "dev",
+  "toolkit_version": "0.4.0",
+  "created_at": "2026-11-18T06:43:29.921660Z",
+  "updated_at": "2026-11-18T08:43:29.921858Z",
+  "prompts": [
+    {
+      "at": "2026-11-18T06:43:29.921660Z",
+      "text": "Import expenses from a CSV file",
+      "is_answer": false
+    }
+  ],
+  "questions": [],
+  "split": [],
+  "question_rounds": 0,
+  "qa": [
+    {
+      "at": "2026-11-18T08:03:29.921660Z",
+      "worker": "W1",
+      "task": "S2",
+      "question": "Should a row with a missing category fail the import?",
+      "answer": "No: report it and keep the other rows.",
+      "answered_by": "planner",
+      "delivered": true
+    }
+  ],
+  "asking_worker": "",
+  "planner_session": "p1",
+  "worker_sessions": {
+    "W1": "w1",
+    "W2": "w2"
+  },
+  "worker_seen": {},
+  "last_worker": "W2",
+  "plan": "- A table for imports\n- A parser\n- An upload endpoint",
+  "options_considered": "",
+  "subtasks": [
+    {
+      "id": "S1",
+      "title": "Add the import table and repository",
+      "worker": "W1",
+      "instructions": "Create the imports table.\nDone when: tests/test_imports.py passes.",
+      "files": [
+        "src/expenses/models/imports.py",
+        "src/expenses/repositories/imports.py"
+      ]
+    },
+    {
+      "id": "S2",
+      "title": "Parse CSV rows into expenses",
+      "worker": "W1",
+      "instructions": "Add the parser.\nDone when: tests/test_parser.py passes.",
+      "files": [
+        "src/expenses/services/csv_parser.py",
+        "tests/test_parser.py"
+      ]
+    },
+    {
+      "id": "S3",
+      "title": "Add the upload endpoint",
+      "worker": "W2",
+      "instructions": "POST /imports.\nDone when: tests/test_import_route.py passes.",
+      "files": [
+        "src/expenses/api/routes/imports.py",
+        "tests/test_import_route.py"
+      ]
+    },
+    {
+      "id": "S4",
+      "title": "Document the import in the README",
+      "worker": "W2",
+      "instructions": "Done when: lint passes.",
+      "files": [
+        "README.md"
+      ]
+    }
+  ],
+  "tasks_done": [
+    "S1",
+    "S2"
+  ],
+  "files": [],
+  "context_pack": [],
+  "work_log": [
+    {
+      "at": "2026-11-18T07:53:29.921660Z",
+      "subtask": "S1",
+      "status": "done",
+      "summary": "Added the imports table with a unique file hash.",
+      "worker": "W1",
+      "files": [
+        "src/expenses/models/imports.py",
+        "src/expenses/repositories/imports.py"
+      ],
+      "handoff": "ImportRepository.create(file_hash, user_id) returns the Import.",
+      "project_notes": []
+    },
+    {
+      "at": "2026-11-18T08:13:29.921660Z",
+      "subtask": "S2",
+      "status": "done",
+      "summary": "Parser reads date, amount and category; bad rows are reported, not skipped.",
+      "worker": "W1",
+      "files": [
+        "src/expenses/services/csv_parser.py",
+        "tests/test_parser.py"
+      ],
+      "handoff": "parse_rows(text) -> ParsedImport(rows, errors).",
+      "project_notes": []
+    }
+  ],
+  "reviews": [],
+  "last_reviewed_tree": null,
+  "open_findings": [],
+  "baseline": {},
+  "failing_checks": [],
+  "new_project": false,
+  "posted_review_round": 0,
+  "warnings": [],
+  "commit_message": "",
+  "pushed_at": null,
+  "pr_url": null,
+  "pr_number": null,
+  "paused_step": null,
+  "error": null,
+  "runs": [
+    {
+      "at": "2026-11-18T07:43:29.921660Z",
+      "role": "planner",
+      "agent": "planner",
+      "model": "opus",
+      "session_id": "p1",
+      "input_tokens": 16200,
+      "output_tokens": 3780,
+      "cache_read_tokens": 189000,
+      "cache_creation_tokens": 3000,
+      "cost_usd": 0.84,
+      "duration_ms": 81000,
+      "num_turns": 9,
+      "label": "planner"
+    },
+    {
+      "at": "2026-11-18T07:53:29.921660Z",
+      "role": "worker",
+      "agent": "worker",
+      "model": "sonnet",
+      "session_id": "w1",
+      "input_tokens": 25200,
+      "output_tokens": 5880,
+      "cache_read_tokens": 294000,
+      "cache_creation_tokens": 3000,
+      "cost_usd": 0.31,
+      "duration_ms": 126000,
+      "num_turns": 14,
+      "label": "W1 \u00b7 S1"
+    },
+    {
+      "at": "2026-11-18T08:03:29.921660Z",
+      "role": "planner",
+      "agent": "planner",
+      "model": "opus",
+      "session_id": "p1",
+      "input_tokens": 3600,
+      "output_tokens": 840,
+      "cache_read_tokens": 42000,
+      "cache_creation_tokens": 3000,
+      "cost_usd": 0.97,
+      "duration_ms": 18000,
+      "num_turns": 2,
+      "label": "planner"
+    },
+    {
+      "at": "2026-11-18T08:13:29.921660Z",
+      "role": "worker",
+      "agent": "worker",
+      "model": "sonnet",
+      "session_id": "w1",
+      "input_tokens": 21600,
+      "output_tokens": 5040,
+      "cache_read_tokens": 252000,
+      "cache_creation_tokens": 3000,
+      "cost_usd": 0.58,
+      "duration_ms": 108000,
+      "num_turns": 12,
+      "label": "W1 \u00b7 S2"
+    }
+  ],
+  "archived": false
+}

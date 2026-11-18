@@ -55,21 +55,22 @@ First time? Follow [FIRST_RUN.md](FIRST_RUN.md). How it works and why: [EXPLANAT
 
 | You want to | Terminal | FRIDAY |
 |---|---|---|
-| Build a project from nothing | `cw new reminders "Remind me when the car insurance expires"` | terminal only |
-| Do a small task | `cw run my-service "make the save button blue"` | type or dictate it in the chat |
+| Build a project from nothing | `cw new reminders "Remind me when the car insurance expires"` | **New project from an idea** |
+| Do a small task | `cw run my-service "make the save button blue"` | **Start a ticket** on the project's page, or ⌘N |
 | Plan a bigger one first | `cw run my-service --plan "add CSV export"` | turn on **Plan first** |
-| Start from another branch | `cw run my-service --base develop "..."` | terminal only |
-| Answer a question, or follow up | `cw run <ticket> "use semicolons"` | select the ticket, reply in the chat |
+| Start from another branch | `cw run my-service --base develop "..."` | **From** in the new ticket box |
+| Answer a question, or follow up | `cw run <ticket> "use semicolons"` | the box under the ticket |
 | Approve a plan | `cw approve <ticket>` | **Approve plan** |
 | Have it reviewed, nothing committed | `cw review <ticket>` | **Review only** |
-| Review it and open the PR | `cw pr <ticket>` | **Review & open PR** |
+| Review it and open the PR | `cw pr <ticket>` | **Review and open PR** |
 | Continue after a stop, an error or the usage limit | `cw resume <ticket>` | **Resume** |
-| Let the worker address the PR's comments, round after round until none are left | `cw fix <ticket>` | **Fix comments** |
+| Let the worker address the PR's comments and open blocking findings, round after round while blocking findings stay open | `cw fix <ticket>` | **Fix comments** |
 | Squash-merge once CI passed | `cw merge <ticket>` | **Merge** |
-| Clean up after merging yourself | `cw done <ticket>` (`--abandon` to drop it) | **Mark done** / **More** |
+| Clean up after merging yourself | `cw done <ticket>` (`--abandon` to drop it) | **More → Done** / **Abandon** |
 | Pause a ticket to start another | `cw park <ticket>` | **More → Park** |
-| Read a ticket | `cw show <ticket>`, or open `~/.cw/tickets/<project>/<ticket>.md` | select it |
-| See everything | `cw status`, `cw stats`, `cw toolkit`, `cw project list` | Overview, Usage, Toolkit |
+| Read a ticket | `cw show <ticket>`, or open `~/.cw/tickets/<project>/<ticket>.md` | select it: pipeline, agents, Plan, Work, Review, Cost |
+| Follow the agents live | `cw events <ticket>` | the agent cards and the **Activity** tab |
+| See everything | `cw status`, `cw stats`, `cw toolkit`, `cw project list`, `cw doctor` | sidebar, Usage, Toolkit, Settings → Health |
 
 Every view has a `--json` form; FRIDAY uses exactly those. While a command runs, cw prints each tool call the agent makes, so you can follow it live.
 
@@ -182,7 +183,7 @@ cw stats
 | `cw init --toolkit <path> --github-repo <owner/name> [--force]` | Write a starter config |
 | `cw config [show] [--json]` | Print the config |
 | `cw config set < config.json` | Replace the config with JSON from stdin |
-| `cw doctor` | Check binaries, tokens, toolkit and plugins |
+| `cw doctor [--json]` | Check binaries, tokens, toolkit and plugins |
 | `cw toolkit [--json]` | Agents, skills and models |
 
 **Projects**
@@ -204,12 +205,12 @@ cw stats
 | `cw run <project> "<request>" [--plan] [--base <branch>]` | Start a ticket |
 | `cw run <ticket> "<follow-up>"` | Answer a question, give plan feedback, or follow up |
 | `cw approve <ticket>` | Approve the plan and run the workers |
-| `cw split <ticket>` | One ticket per change the planner split out |
+| `cw split <ticket>` | One paused ticket per change the planner split out; start each with `cw resume` |
 | `cw resume <ticket>` | Re-run the step that paused, was blocked or stopped |
 | `cw review <ticket>` | Checks and reviewer; nothing is committed |
 | `cw pr <ticket>` | Review, commit once, push, open the pull request |
 | `cw ci <ticket>` | The pull request's CI status |
-| `cw fix <ticket>` | The worker addresses the PR's comments until none are left |
+| `cw fix <ticket>` | The worker addresses the PR's comments and open blocking findings, again while blocking findings stay open (at most 3 rounds) |
 | `cw merge <ticket>` | Squash-merge once CI passed, close the ticket |
 | `cw done <ticket> [--abandon]` | Close the ticket and switch back |
 | `cw park <ticket>` | Save the work as a WIP commit and switch back |
@@ -221,6 +222,7 @@ cw stats
 | `cw status [--project <project>] [--include-archived] [--json]` | List tickets |
 | `cw show <ticket> [--json]` | One ticket |
 | `cw stats [--json]` | Token usage per project and role |
+| `cw events <ticket> [--last N] [--json]` | The ticket's latest agent events: starts, tool calls, ends, failures, checks |
 
 ## Develop
 
@@ -229,8 +231,10 @@ cd backend && uv sync && uv run ruff check src tests && uv run pytest -q
 ```
 
 ```bash
-cd friday && swift build && ./.build/debug/Friday
+cd friday && swift build && ./test.sh && ./.build/debug/Friday
 ```
+
+`friday/test.sh` decodes real `cw` output (`friday/Tests/FridayTests/Fixtures`, rebuilt by `uv run --project backend python friday/Tests/make_fixtures.py`). `./.build/debug/Friday --snapshot friday/Tests/FridayTests/Fixtures <folder>` draws the main screens to PNG files.
 
 ```bash
 claude plugin validate toolkit

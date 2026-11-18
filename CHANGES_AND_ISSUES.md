@@ -4,6 +4,63 @@ A running log of what went wrong in real use, why, and what was changed. Newest 
 
 ---
 
+## 2026-11-18 · B9, B10, B13, B14; runs load only the project's own setup
+
+**Why:** four of the outside review's open bugs, and cw runs still read the personal `.claude/settings.local.json` while blocking the project's own MCP servers.
+
+| # | Problem | Fix |
+|---|---|---|
+| B9 | A PR with no checks reported yet counted as CI passed, so `cw merge` could merge right after a push | No checks passes only when the branch has no `.github/workflows` or `bitbucket-pipelines.yml`; GitHub also needs the PR's head to be the local branch's commit |
+| B10 | The squash merge was not pinned to the commit that passed CI | GitHub's merge gets `sha=<checked commit>` and refuses a moved head; Bitbucket's merge call has no such field, so cw compares the head just before it |
+| B13 | A resumed planner got the whole request and repo map again on every feedback round | A resumed planner gets only the feedback and whether it may still ask |
+| B14 | Any run that printed no result dropped the worker's session and started a fresh, full-price run; a session that really was gone blocked the ticket instead | Checked with Claude Code: a lost session prints an error result, `No conversation found with session ID: …`. That message alone (new `SESSION_LOST`) starts a fresh session; every other failure keeps it. Error results now show Claude Code's `errors` text |
+| Isolation | Runs read `.claude/settings.local.json` (personal) and `--strict-mcp-config` blocked the project's `.mcp.json` | `--setting-sources project`, plus `--mcp-config <checkout>/.mcp.json` when the file exists |
+
+Also: the test stand-ins no longer pass the reviewer's removed `verdict` field. Not run on a real ticket yet.
+
+---
+
+## 2026-11-18 · Defaults: two review and two fix rounds
+
+**Why:** one fix round often left a finding or a check that a second round would have fixed. The shipped defaults (`config.example.json`, which `cw init` copies) are now 2 review rounds, 2 fix rounds, 3 `cw fix` rounds and planner 40 / worker 70 / reviewer 30 / onboarder 60 turns. Projects keep the profile they were added with: change an existing one in its settings, or with FRIDAY's **Apply models & limits to all projects**. The tests pin their own limits to one round, so they do not depend on the defaults.
+
+## 2026-11-18 · FRIDAY redesigned around the agents (branch `fix/review-findings`)
+
+**Why:** FRIDAY showed a ticket as a chat and a log, so it was hard to see which agent was working, which worker had which task, or what the reviewer had left open. It also read too little of the ticket, counted a resumed session's cost more than once, and could not reach `cw new`, `--base`, `cw doctor`, or unregistering and mapping a project.
+
+| # | Change | Where |
+|---|---|---|
+| 1 | Each agent run is recorded in `~/.cw/tickets/<project>/<id>.events.jsonl` (start, tool call, end, failure, checks), labelled with worker and task; `cw events <id> --json` prints them | `claude_runner.py`, `tickets.py`, `cli.py` |
+| 2 | Every run carries its label (`W2 · S3`), so cost can be shown per worker | `models.py` `RunUsage.label` |
+| 3 | `cw doctor --json` | `cli.py` |
+| 4 | FRIDAY rebuilt: sidebar, ticket list, project home, a ticket view with the pipeline, one card per agent, an inspector, six tabs, the next-step bar and a composer; Activity, Usage with charts, Health in Settings; sheets for a new ticket (plan first, base branch), a new project (`cw new`) and adding a repository | `friday/Sources/Friday` |
+| 5 | FRIDAY's tests decode real `cw` output and check stages, agents, per-run cost and actions; `--snapshot` draws the screens | `friday/Tests`, `friday/test.sh`, `Snapshot.swift` |
+| 6 | `cw fix` goes round again while blocking findings stay open (up to 3), as before D2, but its re-reviews no longer open PR threads | `pipeline._fix_pull_request` |
+
+Dropped from FRIDAY: the file tree, the code viewer and the free chat. Not checked by hand against a live run yet.
+
+## 2026-11-18 · An outside review of cw (branch `fix/review-findings`)
+
+**Why:** a reviewer agent read the backend, the toolkit and the docs at `6c3b6b8` and reported bugs (B), skill and prompt contradictions (C) and design problems (D). B1 to B8, all of C and D1, D2, D4, D5 and D6 are addressed here; D3 (latency) is left as it is on purpose.
+
+| # | Problem | Fix |
+|---|---|---|
+| B1 | A merge-conflict resolution was pushed with no checks and no review, and marked as reviewed | After conflicts, cw runs the checks and reviews the resolved files before the push; only a clean merge moves the review past the base's changes |
+| B2 | A review answering `approve` with a blocking comment passed every gate | cw decides from the severities; the reviewer no longer returns a verdict |
+| B3 | A blocking finding disappeared once a later round reviewed only new work | Open blocking findings are kept on the ticket with ids (`F1`, ...); a review names the ones now fixed in `resolved`; the merge gate checks that list |
+| B4 | The ruff hook deleted an import the agent had just added and said nothing | The hook leaves F401 and F841 to the lint check and tells the agent when it changed the file |
+| B5 | The baseline ran before the containers started, so database tests were never enforced | The containers start before the baseline; if they do not, the ticket is not created and the checkout goes back |
+| B6 | A planner that asked again after its last question round produced an empty plan that went to approval | cw tells it once to plan with assumptions; still no plan means the ticket waits for your reply |
+| B7 | A killed `cw review` resumed as `cw pr` and opened a PR | The step is recorded before it runs; a stale review without one resumes as a review |
+| B8 | `cw split` abandoned the original first, ran every split straight away, and one blocked split stopped the rest | It creates paused tickets without running agents, then abandons the original; `cw resume` plans each |
+| C1–C6 | Rules that contradicted the flow: "a worker starts fresh and cannot ask", commands no agent can run (`uv pip show`, `git status`, `/ponytail`, the grep checklist), the 281-line review procedure with its own answer format pinned into every review, interactive ponytail text, "never touch `pyproject.toml`", and Should fix counted as blocking | Planner, worker, reviewer, `pr-review`, `engineering`, `rule-precedence` and ponytail rewritten to match what cw does; `core-rules` adapted; a 115-line `review-checks` topic replaces the procedure in reviews (reviewer rules about 13% smaller); only the procedure's Blocking is `blocking`; the planner's last task leaves cw's notes section in `CLAUDE.md` alone (B15); toolkit 0.4.0 |
+| D1 | The docs called the permission rules a wall, but tests run code the worker wrote | EXPLANATION §9 says what the rules do not stop |
+| D2 | `cw fix` posted each re-review as new threads, which fed the next round with minor findings too | Later reviews are posted as a comment, not as threads; the loop (up to `max_pull_request_fix_rounds`, 3) goes on only while blocking findings stay open, and stops after a round that changed nothing |
+| D4 | Nothing checked the agents' paths | Context-pack entries and review findings on files that do not exist are dropped; a line past the end of a file moves to its last line |
+| D5 | EXPLANATION said a model switch changes only `claude_runner.py` | §13 says that holds for the SDK, not for a local model |
+| D6 | Required project notes grew `CLAUDE.md` without a gate | `project_notes` is optional, at most two a run and five a ticket |
+
+Not done: B9 to B21 apart from B15 (CI with no checks yet, the merge not pinned to a SHA, `cw fix` resolving people's declined threads, re-onboarding wiping decisions, the resumed planner's full prompt, the session fallback, Bitbucket posting, task ids on re-planning, the lock, `tail -f`, `finish` without a remote, the stray `skills/` file). None of this has run on a real project yet.
 ## 2026-11-17 · Back-off to a fresh session (branch `feature/react`)
 
 **Why:** from the ReAct paper (arXiv:2210.03629): past a few steps, more ReAct steps stopped helping, and switching method beat pushing on. In cw, a task whose checks still failed after its fix round stopped, and `cw resume` continued the same worker session, carrying every failed attempt and every file it had read.
