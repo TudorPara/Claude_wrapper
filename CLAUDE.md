@@ -27,7 +27,8 @@ uv tool install --force ./backend   # after changing cw, so the `cw` on your PAT
 - `main` works and is left as it is. New work goes on its own branch: `feature/<paper>` for an idea from a research paper (judged by: results as good as plain Claude Code, a multi-agent flow, fewer tokens), `fix/<topic>` for fixes. Never commit to `main` directly.
 - `feature/react` (pushed): one back-off step, a fresh worker session started from the last attempt's reflection when a task's checks still fail after its fix round. Not tried on a real project yet.
 - `fix/review-findings` (not committed yet when this was written): the outside review's B1–B8, B15, C and D1, D2, D4–D6; `cw fix` loops while blocking findings stay open; the event log (`cw events`), run labels, `cw doctor --json`; FRIDAY redesigned around the agents; shipped defaults of 2 review and 2 fix rounds. Details: the 2026-11-18 entries of `CHANGES_AND_ISSUES.md`.
-- Still open: B11, B12 and B16–B21 (B9, B10, B13 and B14 were fixed on 2026-11-18, together with runs loading only the project's settings and `.mcp.json`) (listed in `EXPLANATION.md` §16), and the three known bugs listed there. Nothing on this branch has run against a live ticket yet; the next useful check is one real ticket through `cw` and FRIDAY, compared with `cw stats` on `main`.
+- Also on `fix/review-findings`: B9, B10, B13 and B14, and cw runs loading only the project's settings and `.mcp.json`. `EXPLANATION.md` §17 tells the whole history in order.
+- Still open: B11, B12 and B16–B21 and the three known bugs, all listed in `EXPLANATION.md` §16. Nothing on this branch has run against a live ticket yet; the next useful check is one real ticket through `cw` and FRIDAY, compared with `cw stats` on `main`.
 
 ## Rules that must keep holding
 

@@ -115,7 +115,7 @@ Every loop has a limit in the config, so a ticket can't run away in time or cost
 - The reviewer may judge the same finding "minor" in one round and "blocking" in the next, so the fix round now gets every finding.
 - Headless `/compact` works (`claude -p "/compact" --resume <id>`), but cw starts a fresh session from the ticket instead.
 
-Sources and links: `EXPLANATION.md` §17.
+Sources and links: `EXPLANATION.md` §18.
 
 ## Tested on real work (16 November 2026)
 
