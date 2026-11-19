@@ -61,6 +61,17 @@ Dropped from FRIDAY: the file tree, the code viewer and the free chat. Not check
 | D6 | Required project notes grew `CLAUDE.md` without a gate | `project_notes` is optional, at most two a run and five a ticket |
 
 Not done: B9 to B21 apart from B15 (CI with no checks yet, the merge not pinned to a SHA, `cw fix` resolving people's declined threads, re-onboarding wiping decisions, the resumed planner's full prompt, the session fallback, Bitbucket posting, task ids on re-planning, the lock, `tail -f`, `finish` without a remote, the stray `skills/` file). None of this has run on a real project yet.
+## 2026-11-17 · Back-off to a fresh session (branch `feature/react`)
+
+**Why:** from the ReAct paper (arXiv:2210.03629): past a few steps, more ReAct steps stopped helping, and switching method beat pushing on. In cw, a task whose checks still failed after its fix round stopped, and `cw resume` continued the same worker session, carrying every failed attempt and every file it had read.
+
+| # | Change | Where |
+|---|---|---|
+| 1 | The worker's fix answer has a `reflection`: what it tried, why it may still fail, what to try next | `models.py` |
+| 2 | A task still failing after its fix round gets one fresh session of its worker, started from the reflection and the failing output (Reflexion; observation dropping from *The Complexity Trap*) | `pipeline._back_off`, `prompts.backoff_instruction` |
+| 3 | Capped by `limits.max_backoff_rounds` (default 1); the ticket stops as before when the back-off fails too | `config.py`, `Models.swift` |
+
+Not measured on a real project yet: compare `cw stats` and the outcome on a task that fails its checks, against main.
 
 ## 2026-11-17 · Expense tracker from nothing (17 tasks, PostgreSQL); stop on broken checks, `cw fix` loop, containers
 

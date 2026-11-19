@@ -131,7 +131,7 @@ you: prompt (terminal, FRIDAY or voice)        cw new <name> "<idea>" also creat
                                                                       │
                                        S1 (W1) ─► S2 (W1, same session) ─► S3 (W2, new session) ─► S4 (W1) …
                                        a worker's question ─► planner answers ─► or you do
-                                       after every task: checks ─ broke? ─► up to 2 fix rounds by that worker
+                                       after every task: checks ─ broke? ─► one fix round by that worker
                                                          ─ still broken? ─► the ticket stops (BLOCKED)
  │
  ▼  READY: changes are uncommitted in your checkout · reply to adjust · cw review · or Park
@@ -689,6 +689,7 @@ Each change below came from a real run or a review. The details, with every bug'
 - Yao et al., *ReAct* ([arXiv:2210.03629](https://arxiv.org/abs/2210.03629)): the reason → act → observe loop inside every agent run.
 - Madaan et al., *Self-Refine* ([arXiv:2303.17651](https://arxiv.org/abs/2303.17651)) and Shinn et al., *Reflexion* ([arXiv:2303.11366](https://arxiv.org/abs/2303.11366)): feedback loops, the idea behind the reviewer → worker fix round, and why it's capped.
 - Jimenez et al., *SWE-bench* ([arXiv:2310.06770](https://arxiv.org/abs/2310.06770)) and Yang et al., *SWE-agent* ([arXiv:2405.15793](https://arxiv.org/abs/2405.15793)): how coding agents are evaluated.
+- Lindenbauer et al., *The Complexity Trap* ([arXiv:2508.21433](https://arxiv.org/abs/2508.21433)): dropping old tool outputs roughly halves an agent's cost and solves as many tasks as LLM summarization; the reason the back-off starts a fresh session.
 - Liu et al., *Lost in the Middle* ([arXiv:2307.03172](https://arxiv.org/abs/2307.03172)): long contexts are used less reliably, another reason for small hand-offs.
 
 **Reference docs**
