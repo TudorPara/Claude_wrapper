@@ -349,6 +349,7 @@ def _worker(
                 files=actual_files,
                 handoff=worker_result.handoff,
                 project_notes=notes_kept,
+                reflection=worker_result.reflection,
             )
         )
         notes = project_memory.add_notes(project.path, notes_kept)
