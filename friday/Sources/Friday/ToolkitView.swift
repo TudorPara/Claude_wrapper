@@ -27,7 +27,7 @@ struct ToolkitView: View {
                             ForEach(AgentRole.allCases) { role in
                                 GridRow {
                                     Text(role.label)
-                                    Text(toolkit.agents.first { $0.name == role.rawValue }?.model ?? "?").foregroundStyle(.secondary)
+                                    Text(toolkit.agents.first { $0.name == role.agentName }?.model ?? "?").foregroundStyle(.secondary)
                                     ForEach(config.projects) { project in
                                         Text(project.profile.models[role])
                                             .font(.callout.monospaced())

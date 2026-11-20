@@ -6,6 +6,13 @@ struct RoleModels: Codable, Equatable {
     var worker: String
     var reviewer: String
     var onboarder: String
+    var reviewerFollowup: String?
+    var context: String?
+
+    enum CodingKeys: String, CodingKey {
+        case planner, worker, reviewer, onboarder, context
+        case reviewerFollowup = "reviewer_followup"
+    }
 
     subscript(role: AgentRole) -> String {
         get {
@@ -14,6 +21,7 @@ struct RoleModels: Codable, Equatable {
             case .worker: worker
             case .reviewer: reviewer
             case .onboarder: onboarder
+            case .context: context ?? AgentRole.contextDefaultModel
             }
         }
         set {
@@ -22,6 +30,7 @@ struct RoleModels: Codable, Equatable {
             case .worker: worker = newValue
             case .reviewer: reviewer = newValue
             case .onboarder: onboarder = newValue
+            case .context: context = newValue
             }
         }
     }
@@ -32,6 +41,7 @@ struct RoleTurns: Codable, Equatable {
     var worker: Int
     var reviewer: Int
     var onboarder: Int
+    var context: Int?
 
     subscript(role: AgentRole) -> Int {
         get {
@@ -40,6 +50,7 @@ struct RoleTurns: Codable, Equatable {
             case .worker: worker
             case .reviewer: reviewer
             case .onboarder: onboarder
+            case .context: context ?? AgentRole.contextDefaultTurns
             }
         }
         set {
@@ -48,6 +59,7 @@ struct RoleTurns: Codable, Equatable {
             case .worker: worker = newValue
             case .reviewer: reviewer = newValue
             case .onboarder: onboarder = newValue
+            case .context: context = newValue
             }
         }
     }
@@ -68,6 +80,7 @@ struct Limits: Codable, Equatable {
     var maxWorkers: Int?
     var maxPullRequestFixRounds: Int?
     var maxBackoffRounds: Int?
+    var reviewSkipMaxChangedLines: Int?
 
     enum CodingKeys: String, CodingKey {
         case maxReviewRounds = "max_review_rounds"
@@ -84,6 +97,7 @@ struct Limits: Codable, Equatable {
         case maxWorkers = "max_workers"
         case maxPullRequestFixRounds = "max_pull_request_fix_rounds"
         case maxBackoffRounds = "max_backoff_rounds"
+        case reviewSkipMaxChangedLines = "review_skip_max_changed_lines"
     }
 }
 
@@ -180,9 +194,10 @@ struct CWConfig: Codable, Equatable {
     var stacks: [String: StackSettings]
     var defaults: Profile
     var projects: [Project]
+    var storage: StorageSettings?
 
     enum CodingKeys: String, CodingKey {
-        case toolkit, stacks, defaults, projects
+        case toolkit, stacks, defaults, projects, storage
         case claudeBinary = "claude_binary"
         case availableModels = "available_models"
         case permissionModes = "permission_modes"
@@ -191,10 +206,44 @@ struct CWConfig: Codable, Equatable {
     }
 }
 
+/// Writes FRIDAY's edits into the config cw printed, keeping every key FRIDAY does not know; list items match by name.
+func mergedConfig(_ original: Any?, _ edited: Any) -> Any {
+    if let editedObject = edited as? [String: Any] {
+        var merged = (original as? [String: Any]) ?? [:]
+        for (key, value) in editedObject { merged[key] = mergedConfig(merged[key], value) }
+        return merged
+    }
+    if let editedItems = edited as? [[String: Any]], let originalItems = original as? [[String: Any]] {
+        let byName = Dictionary(
+            originalItems.compactMap { item in (item["name"] as? String).map { ($0, item) } },
+            uniquingKeysWith: { first, _ in first }
+        )
+        return editedItems.map { item in mergedConfig((item["name"] as? String).flatMap { byName[$0] }, item) }
+    }
+    return edited
+}
+
+struct StorageSettings: Codable, Equatable {
+    var maxIndexMb: Int?
+    var eventRetentionDays: Int?
+
+    static let defaultEventRetentionDays = 30
+
+    enum CodingKeys: String, CodingKey {
+        case maxIndexMb = "max_index_mb"
+        case eventRetentionDays = "event_retention_days"
+    }
+}
+
 enum AgentRole: String, CaseIterable, Identifiable {
-    case planner, worker, reviewer, onboarder
+    case planner, worker, reviewer, onboarder, context
     var id: String { rawValue }
-    var label: String { rawValue.capitalized }
+    var label: String { self == .context ? "Context (HyDE sketch)" : rawValue.capitalized }
+    /// The toolkit agent file that plays this role.
+    var agentName: String { self == .context ? "context-sketcher" : rawValue }
+
+    static let contextDefaultModel = "haiku"
+    static let contextDefaultTurns = 1
 }
 
 enum TicketStatus: String, Codable, CaseIterable {

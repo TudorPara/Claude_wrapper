@@ -12,6 +12,7 @@ From a fresh Mac to your first ticket. Commands assume this repository is at `~/
 | Swift (for FRIDAY) | `swift --version` | comes with the Command Line Tools |
 | gh, for GitHub projects | `gh auth status` | `brew install gh && gh auth login` |
 | SSH access to your repositories | `ssh -T git@github.com` | add your key to GitHub or Bitbucket |
+| Ollama, for the context engine's embeddings | `ollama --version` | `brew install ollama`, then `ollama serve` and `ollama pull qwen3-embedding:8b-q8_0` (about 8 GB) |
 
 ## 2. Install the backend (`cw`)
 
@@ -87,6 +88,14 @@ cd ~/code && cw new reminders "Remind me when the car insurance expires and when
 ```
 
 Add `--github private` to also create the repository on GitHub with `gh`, so the ticket ends in a real pull request. Without a remote, `cw pr` reviews and commits on the ticket's branch and `cw done` merges it into `main`.
+
+**Build its context index once** (needs Ollama running). Tickets keep it up to date afterwards; without it, the first ticket builds it without embeddings and tells you to run this:
+
+```bash
+cw context build my-service
+```
+
+On a large repository the first build takes a while: about 1.5 chunks a second with the 8B model on an M5, so a few thousand files can take hours. `context.embeddings.model` set to `qwen3-embedding:4b` is faster.
 
 Optional extras:
 - `cw project onboard my-service`: maps the project with the onboarder agent. It costs tokens; useful for an unfamiliar repository without a `CLAUDE.md`.

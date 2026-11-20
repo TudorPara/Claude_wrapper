@@ -56,6 +56,7 @@ enum Theme {
         case .worker: .blue
         case .reviewer: .orange
         case .onboarder: .teal
+        case .context: .gray
         }
     }
 
@@ -65,6 +66,7 @@ enum Theme {
         case .worker: "hammer"
         case .reviewer: "eye"
         case .onboarder: "binoculars"
+        case .context: "sparkle.magnifyingglass"
         }
     }
 

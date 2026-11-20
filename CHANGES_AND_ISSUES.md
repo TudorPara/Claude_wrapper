@@ -4,6 +4,62 @@ A running log of what went wrong in real use, why, and what was changed. Newest 
 
 ---
 
+## 2026-11-19 · Review cost, the pull request merge gate, and the context engine (branch `features/optimizations-and-embeddings`)
+
+**Why:** the 13-ticket manual test cost $9.04, and reviews were 47% of it ($4.21): every `cw fix` round ran a whole review-and-fix loop (7 reviewer runs on the layer refactor), every review ran on Opus, and a two-line answer to a comment got an Opus review. The test also showed that `cw merge` ignored unresolved PR comments, `cw fix` resolved comments the worker refused (B11), and fix rounds kept editing `README.md` and `CLAUDE.md`. On large repositories the planner explored on its own. The plan is `CONTEXT_ENGINE_PLAN.md`, revised after a review against the code and a second outside review.
+
+### Pull requests and review cost
+
+| # | Problem | Fix |
+|---|---|---|
+| 1 | Unresolved PR threads did not stop `cw merge` | It refuses and lists them: declined by the worker, or not addressed. Minor findings are threads too, so they need `cw fix` or a person |
+| 2 | B11: `cw fix` resolved every thread it sent | The worker answers each labelled thread `fixed` or `declined`; only fixed ones are resolved; declined ones get a reply (`cw · declined: …`) and are not resent until someone answers |
+| 3 | `cw fix` ran a review loop inside every round | One review per round; the next round takes what it found |
+| 4 | Every review on Opus | Every review after a ticket's first runs on `reviewer_followup` (Sonnet) |
+| 5 | An Opus review of a two-line comment fix | A comment-only round that changed at most 20 lines, no protected path, with passing checks, skips its review (`review_skip_max_changed_lines`) |
+| 6 | Findings matched to threads by text | Posted findings carry their id (`[F3]`); a round that fixes one is always reviewed |
+| 7 | Fix rounds edited `README.md` and `CLAUDE.md` | Fix passes keep no notes; editing those files unasked is flagged; the README review rule applies only when the diff changes something the README documents |
+| 8 | FRIDAY dropped config keys it did not know on save | It writes only what it edits into the JSON it read |
+
+### The context engine
+
+- A per-project index (`~/.cw/projects/<project>/context.sqlite3`, keyed by git blob), refreshed at ticket start and finish; keyword (FTS5), path, history, embedding (Ollama `qwen3-embedding:8b-q8_0`) and HyDE (Haiku, bare, one turn) channels, fused by rank, with a PageRank graph channel; a seed with a folder outline that **replaces** the repo map for the planner and a direct ticket's first worker run.
+- Ticket records (request, plan excerpt, changed files, open findings, notes) replace the notes in `CLAUDE.md`. They are per person. `cw context migrate-notes` imports an old section once.
+- `cw context build / status / search / eval / migrate-notes`, `cw gc`, `cw project remove --purge`, `cw audit`, `cw benchmark`, and `BENCHMARK.md`.
+- The eval scores finished tickets or, with `--from-commits`, git history, skipping commits cw tickets produced so their records cannot leak the answer.
+- Found while testing: on a branch the base already contains (a fast-forward merge), the ticket's own changes are measured from the commit it started at.
+- **Found by an independent code review, all fixed with a test each:** a ticket's record (and its notes) was lost when Ollama was down at finish; the second ticket start embedded the whole repository (the cap counted changed files, not files without vectors; `max_incremental_files` is now 20, about two minutes at the measured speed); a declined thread carrying a blocking finding was sent again as a finding every round; `cw context status` and `cw gc` took the project lock even for a dry run; `--prune` and a format rebuild deleted ticket records; an unreadable ticket file could fail `cw done` after closing the ticket; the seed's folder outline was not counted in its budget.
+- **2026-11-20, from a further review, each confirmed by running it:** the graph only lifted what found code depends on, never its callers (a caller's rank was 0.0); edges now also run backwards at `reverse_edge_weight` (0.5), which raised graph R@5 on this repository from 0.33 to 0.44. File blocks could fill the seed and drop the similar tickets, the only way notes reach later work (9 of 58 size mixes); `seed_ticket_tokens` (500) is now kept for them. `lexical_top_k` capped both the query terms and the keyword results; `max_query_terms` is now its own setting. And `cw context search` / `eval` left an events file per run that nothing removed; they now delete it.
+- **Run for real on 2026-11-20** (a throwaway project, Haiku and Sonnet): the index build, a planned ticket whose seed found the right three files including the caller and the test, one sketch reused after a resume, the review, the local merge with `changed_files` and the merge commit recorded, the record found by the next request's history, `cw audit`, `cw benchmark`, `cw gc` and `cw doctor`. Haiku could not produce the planner's structured answer (5 tries); the planner stays on Opus by default.
+
+### Upgrade
+
+Nothing in `config.json` needs to change: every new setting has a default. To use embeddings:
+
+```
+brew install ollama
+ollama serve
+ollama pull qwen3-embedding:8b-q8_0
+cw context build <project>
+```
+
+Reinstall cw (`uv tool install --force ./backend`); the backend now depends on `numpy`.
+
+### Measured on this Mac
+
+- Embeddings: related code 0.96 apart from unrelated 0.40; a money query 0.74–0.75 on the two money functions, 0.20 on an unrelated one.
+- **A full build of this repository: 58 files, 492 chunks, 330 s, about 1.5 chunks a second, 4.8 MB.** A large repository's first build takes hours with the 8B model; `qwen3-embedding:4b` is a settings change.
+- `cw context search`: about 0.5 s. One HyDE sketch: about 1.8k input tokens, $0.0004–0.0006, and it works with one turn, so the default is 1.
+- `cw context eval --from-commits 40` on this repository (12 usable commits): lexical R@5 0.42, R@20 0.61; +graph R@5 0.33, R@20 0.65; +dense R@5 0.45, R@20 0.66, MRR 0.61. Too few samples to tune on.
+
+### Not verified
+
+- Any of this on a real ticket; the cost and quality effect (run `BENCHMARK.md` twice on `main` first, for the noise).
+- GitHub's `addPullRequestReviewThreadReply` and `lastComment` against a real pull request; all of the Bitbucket side.
+- Retrieval on languages without a graph and on repositories larger than this one; recall at 4096 dimensions against 1024.
+
+---
+
 ## 2026-11-18 · B9, B10, B13, B14; runs load only the project's own setup
 
 **Why:** four of the outside review's open bugs, and cw runs still read the personal `.claude/settings.local.json` while blocking the project's own MCP servers.

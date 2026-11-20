@@ -6,9 +6,10 @@ A workflow around Claude Code for a small team: a shared **toolkit** of agents, 
 
 | Path | What |
 |---|---|
-| `backend/src/cw/` | `cli.py` commands · `pipeline.py` the ticket flow · `prompts.py` what each agent is told · `claude_runner.py` one `claude -p` run · `process.py` child processes with a time limit · `tickets.py` ticket files · `project_memory.py` notes in a project's `CLAUDE.md` · `repo_map.py` the planner's map of a repository · `git.py` · `onboarding.py` projects · `config.py` · `toolkit.py` reads the toolkit |
-| `backend/tests/` | `conftest.py` has `FakeAgents`, which stands in for `claude -p` |
-| `toolkit/plugins/core/` | agents `planner`, `worker`, `reviewer`, `onboarder`; skills; `scripts/guard.py` |
+| `backend/src/cw/` | `cli.py` commands · `pipeline.py` the ticket flow · `prompts.py` what each agent is told · `claude_runner.py` one `claude -p` run · `process.py` child processes with a time limit · `tickets.py` ticket files · `project_memory.py` reads old notes in a project's `CLAUDE.md` · `repo_map.py` the planner's fallback map · `git.py` · `onboarding.py` projects · `config.py` · `toolkit.py` reads the toolkit |
+| `backend/src/cw/` (context engine) | `code_chunks.py` ast chunking · `context_index.py` the SQLite index (all its SQL) · `context_search.py` channels, fusion, graph, seed · `embeddings.py` Ollama · `context_engine.py` refresh, seed, records at ticket time · `context_eval.py` `cw context eval` · `storage.py` `cw gc` · `benchmark.py` `cw audit`, `cw benchmark` |
+| `backend/tests/` | `conftest.py` has `FakeAgents`, which stands in for `claude -p`, and `FakeOllama` (autouse), which stands in for Ollama; `claude_binary` points at a path that does not exist |
+| `toolkit/plugins/core/` | agents `planner`, `worker`, `reviewer`, `onboarder`, `context-sketcher`; skills; `scripts/guard.py` |
 | `toolkit/plugins/python/` | skill `python-rules` (index `SKILL.md` + `topics/`, the nexttech-claude-kit rules without reviewers' names), hooks `rules_on_touch.py`, `ruff_on_edit.py` |
 | `friday/Sources/Friday/` | the SwiftUI app; it only runs `cw` and decodes its `--json` output (`Store.swift` reads and runs, `Insights.swift` turns a ticket into stages, agents and actions) |
 | `friday/Tests/` | decoding and logic tests on real `cw` output; `make_fixtures.py` rebuilds the fixtures |
@@ -17,7 +18,7 @@ A workflow around Claude Code for a small team: a shared **toolkit** of agents, 
 
 ```bash
 cd backend && uv sync && uv run ruff check src tests && uv run ruff format --check src tests && uv run pytest -q
-cd friday && swift build && ./test.sh   # ./build-app.sh makes FRIDAY.app
+cd friday && swift build && ./test.sh   # ./build-app.sh makes FRIDAY.app; rerun make_fixtures.py after --json changes
 claude plugin validate toolkit
 uv tool install --force ./backend   # after changing cw, so the `cw` on your PATH is the new one
 ```
@@ -28,13 +29,15 @@ uv tool install --force ./backend   # after changing cw, so the `cw` on your PAT
 - `feature/react` (pushed): one back-off step, a fresh worker session started from the last attempt's reflection when a task's checks still fail after its fix round. Not tried on a real project yet.
 - `fix/review-findings` (not committed yet when this was written): the outside review's B1–B8, B15, C and D1, D2, D4–D6; `cw fix` loops while blocking findings stay open; the event log (`cw events`), run labels, `cw doctor --json`; FRIDAY redesigned around the agents; shipped defaults of 2 review and 2 fix rounds. Details: the 2026-11-18 entries of `CHANGES_AND_ISSUES.md`.
 - Also on `fix/review-findings`: B9, B10, B13 and B14, and cw runs loading only the project's settings and `.mcp.json`. `EXPLANATION.md` §17 tells the whole history in order.
-- Still open: B11, B12 and B16–B21 and the three known bugs, all listed in `EXPLANATION.md` §16. Nothing on this branch has run against a live ticket yet; the next useful check is one real ticket through `cw` and FRIDAY, compared with `cw stats` on `main`.
+- `features/optimizations-and-embeddings` (from `main` at `255c789`, not committed yet when this was written): `CONTEXT_ENGINE_PLAN.md`, all steps. Review cost (one review per `cw fix` round, Sonnet re-reviews, review skip), the PR merge gate and comment outcomes (B11), and the context engine (`EXPLANATION.md` §19). Measure it with `BENCHMARK.md`.
+- Still open: B12 and B16–B21 and the three known bugs, all listed in `EXPLANATION.md` §16. Nothing from 2026-11-18 on has run against a live ticket yet.
 
 ## Rules that must keep holding
 
 - Agents never commit, push, merge or switch branches. cw does it, once, at `cw pr`. The guard hook and the worker's Bash allow-list enforce this.
 - Agents communicate only through the ticket. `prompts.py` gives an agent the part of the ticket it needs; its structured answer is written back by `pipeline.py`. A resumed worker gets only what is new.
-- Nothing is written into a project's repository except the agent's code changes and the "Notes kept by cw" section of its `CLAUDE.md` (`project_memory.py`, from the workers' optional `project_notes`, at most five per ticket). Both are in the ticket's diff, reviewed and committed once. Tickets live in `~/.cw/tickets/<project>/` as `<id>.json` (state) and `<id>.md` (the readable twin).
+- Nothing is written into a project's repository except the agent's code changes, in the ticket's diff, reviewed and committed once. Workers' `project_notes` (at most five per ticket) go into the ticket's record in the context index, never into `CLAUDE.md`. Tickets live in `~/.cw/tickets/<project>/` as `<id>.json` (state) and `<id>.md` (the readable twin); the index in `~/.cw/projects/<project>/context.sqlite3`.
+- The context engine never stops a ticket: an index, Ollama or HyDE failure becomes a `Context:` warning. Tests never call Ollama or `claude`.
 - Workers take turns in one checkout. No parallel edits, no worktrees.
 - Every loop has a cap in `Limits` (`config.py`). A new loop gets a cap.
 - Rules reach agents three ways: pinned skills (`pin: true`, keep them short), topic files shown by `rules_on_touch.py`, and hooks. Do not paste long rule files into prompts.

@@ -71,7 +71,7 @@ PYTHONPATH=. uv run alembic heads
 - No `__pycache__` or other generated file is committed (#1).
 - `.gitignore` stays generic for the whole team; personal entries go in `.git/info/exclude` (#1, #13, #18). `.claude/` is one of those personal entries.
 - Every text file keeps its final newline (#13).
-- The README matches the tree: a command in it that no longer works is a finding (#1).
+- The README matches the tree: when the diff changes a command, env key, setup step or public endpoint the README documents, the README line that no longer works is a finding (#1).
 
 ## 5. Inside the Bash sandbox
 

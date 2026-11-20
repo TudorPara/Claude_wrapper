@@ -39,9 +39,26 @@ private let blocked = "261118-cookie-auth-i9j0"
 @Test func theConfigSurvivesARoundTripThroughFriday() throws {
     let original = try JSONSerialization.jsonObject(with: fixture("config.json")) as! [String: Any]
     let config = try JSONDecoder().decode(CWConfig.self, from: fixture("config.json"))
-    let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(config)) as! [String: Any]
-    let lost = Set(original.keys).subtracting(encoded.keys).subtracting(["bitbucket"])
+    let edited = try JSONSerialization.jsonObject(with: JSONEncoder().encode(config))
+    let saved = mergedConfig(original, edited) as! [String: Any]
+    let lost = Set(original.keys).subtracting(saved.keys).subtracting(["bitbucket"])
     #expect(lost.isEmpty, "keys FRIDAY would drop on save: \(lost)")
+}
+
+@Test func savingKeepsEveryKeyFridayDoesNotKnow() throws {
+    var original = try JSONSerialization.jsonObject(with: fixture("config.json")) as! [String: Any]
+    original["future_group"] = ["kept": true]
+    var projects = original["projects"] as! [[String: Any]]
+    projects[0]["future_project_key"] = "kept"
+    original["projects"] = projects
+    var config = try JSONDecoder().decode(CWConfig.self, from: JSONSerialization.data(withJSONObject: original))
+    config.defaults.limits.maxReviewRounds = 7
+    let edited = try JSONSerialization.jsonObject(with: JSONEncoder().encode(config))
+    let merged = mergedConfig(original, edited) as! [String: Any]
+    #expect((merged["future_group"] as? [String: Bool])?["kept"] == true)
+    #expect(((merged["projects"] as? [[String: Any]])?[0]["future_project_key"] as? String) == "kept")
+    let limits = (merged["defaults"] as? [String: Any])?["limits"] as? [String: Any]
+    #expect(limits?["max_review_rounds"] as? Int == 7)
 }
 
 @Test func aResumedSessionsCostIsCountedOnce() throws {

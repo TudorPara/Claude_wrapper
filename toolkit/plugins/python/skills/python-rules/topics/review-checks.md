@@ -90,7 +90,7 @@ What to check in a Python diff, taken from the team's PR review procedure (`pr-r
 - Only the task's files. `uv.lock` changes only with `pyproject.toml`. No generated or personal file, and nothing personal added to `.gitignore`.
 - The lint check cw ran gains no finding.
 - One import root, one logger per module, no comments, no typo in a name or a file name.
-- The README and `.env.example` still match the tree after the change.
+- `.env.example` still matches the settings after the change. A README finding only when the diff changes something the README documents (a command, an env key, a setup step, a public endpoint), naming that README line.
 - The description says what the PR adds, how it was tested, what deviates from the docs, what is stubbed and what goes beyond the Linear issue.
 
 **K. Names**, held to `nexttech-python-style`, and strictly

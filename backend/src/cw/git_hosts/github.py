@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 from cw.errors import AppErrorCode, AppException
-from cw.git_hosts.base import PullRequest, PullRequestThread
+from cw.git_hosts.base import PullRequest, PullRequestThread, finding_text
 from cw.models import ReviewComment
 
 logger = logging.getLogger(__name__)
@@ -23,9 +23,14 @@ MAX_THREAD_COMMENTS = 20
 THREADS_QUERY = (
     "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { "
     f"pullRequest(number: $number) {{ reviewThreads(first: {MAX_THREADS}) {{ nodes {{ id isResolved path line "
-    f"originalLine comments(first: {MAX_THREAD_COMMENTS}) {{ nodes {{ body author {{ login }} }} }} }} }} }} }} }}"
+    f"originalLine comments(first: {MAX_THREAD_COMMENTS}) {{ nodes {{ body author {{ login }} }} }} "
+    "lastComment: comments(last: 1) { nodes { body } } } } } } }"
 )
 RESOLVE_MUTATION = "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { id } } }"
+REPLY_MUTATION = (
+    "mutation($id: ID!, $body: String!) { addPullRequestReviewThreadReply("
+    "input: {pullRequestReviewThreadId: $id, body: $body}) { comment { id } } }"
+)
 
 
 class GitHubHost:
@@ -62,7 +67,7 @@ class GitHubHost:
                 "path": comment.path,
                 "line": comment.line,
                 "side": NEW_SIDE,
-                "body": f"**{comment.severity}** {comment.body}",
+                "body": finding_text(comment),
             }
             for comment in comments
         ]
@@ -72,9 +77,7 @@ class GitHubHost:
         except AppException as error:
             if UNPROCESSABLE_HINT not in error.detail:
                 raise
-            listed = "\n".join(
-                f"- `{comment.path}:{comment.line}` **{comment.severity}** {comment.body}" for comment in comments
-            )
+            listed = "\n".join(f"- `{comment.path}:{comment.line}` {finding_text(comment)}" for comment in comments)
             fallback = {"body": f"{summary}\n\n{listed}", "event": REVIEW_EVENT}
             self._gh("api", "--method", "POST", endpoint, "--input", "-", stdin=json.dumps(fallback))
 
@@ -130,6 +133,7 @@ class GitHubHost:
                     f"{(comment['author'] or {}).get('login', GHOST_AUTHOR)}: {comment['body']}"
                     for comment in thread["comments"]["nodes"]
                 ),
+                last_comment=next((comment["body"] for comment in thread["lastComment"]["nodes"]), ""),
             )
             for thread in threads
             if not thread["isResolved"]
@@ -139,13 +143,18 @@ class GitHubHost:
         """Resolve a review thread."""
         self._gh("api", "graphql", "-f", f"query={RESOLVE_MUTATION}", "-f", f"id={thread_id}")
 
-    def merge(self, number: int, branch: str, message: str, sha: str) -> None:
+    def reply_to_thread(self, number: int, thread_id: str, body: str) -> None:
+        """Reply in a review thread without resolving it."""
+        self._gh("api", "graphql", "-f", f"query={REPLY_MUTATION}", "-f", f"id={thread_id}", "-f", f"body={body}")
+
+    def merge(self, number: int, branch: str, message: str, sha: str) -> str:
         """Squash-merge through the API, pinned to the checked head, then delete the branch on GitHub.
 
-        GitHub refuses the merge when the head is no longer `sha`. The local checkout is left to cw.
+        GitHub refuses the merge when the head is no longer `sha`. The local checkout is left to cw. Returns the squash
+        commit's SHA.
         """
         repository = self._repository()
-        self._gh(
+        merged = self._gh(
             "api",
             "--method",
             "PUT",
@@ -156,5 +165,8 @@ class GitHubHost:
             f"commit_title={message}",
             "-f",
             f"sha={sha}",
+            "--jq",
+            ".sha",
         )
         self._gh("api", "--method", "DELETE", f"repos/{repository}/git/refs/heads/{branch}")
+        return merged

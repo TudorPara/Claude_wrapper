@@ -246,14 +246,21 @@ private struct FindingRow: View {
 }
 
 struct ActivityTab: View {
+    @Environment(Store.self) private var store
     let ticket: Ticket
     let events: [AgentEvent]
     let job: Job?
     @State private var showOutput = false
 
+    private var retentionDays: Int {
+        store.config?.storage?.eventRetentionDays ?? StorageSettings.defaultEventRetentionDays
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if events.isEmpty {
+            if events.isEmpty && ticket.archived {
+                ContentUnavailableView("Activity log removed", systemImage: "clock.arrow.circlepath", description: Text("Closed tickets keep their activity log for \(retentionDays) days; cw gc removes it after that. The ticket itself stays."))
+            } else if events.isEmpty {
                 ContentUnavailableView("No activity yet", systemImage: "waveform.path.ecg", description: Text("Every agent start, tool call, end and check shows up here, wherever the run was started."))
             } else {
                 Block(title: "Agent activity", systemImage: "waveform.path.ecg") {

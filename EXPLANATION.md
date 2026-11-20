@@ -1,6 +1,6 @@
 # How this project works
 
-This document explains the whole project as it is today. It covers the idea, the concepts, the architecture, the workflow step by step, every agent, skill and hook, how the agents communicate, how one agent run is put together, the configuration, FRIDAY, and what is and is not verified. §17 tells, in order, how the project got here: every refinement, fix and optimization, and why it was made.
+This document explains the whole project as it is today. It covers the idea, the concepts, the architecture, the workflow step by step, every agent, skill and hook, how the agents communicate, how one agent run is put together, the configuration, FRIDAY, the context engine (§19), and what is and is not verified. §17 tells, in order, how the project got here: every refinement, fix and optimization, and why it was made.
 
 Setup and daily commands are in [FIRST_RUN.md](FIRST_RUN.md) and [README.md](README.md). The detailed log of each change, with the bugs behind it, is [CHANGES_AND_ISSUES.md](CHANGES_AND_ISSUES.md).
 
@@ -11,7 +11,7 @@ Setup and daily commands are in [FIRST_RUN.md](FIRST_RUN.md) and [README.md](REA
 A small team works on several projects with Claude Code. The goals:
 
 1. **Centralize.** One shared toolkit of agents, skills, rules and hooks, so every teammate and every project works the same way and the code looks the same.
-2. **Simple and cheap.** Each job goes to the right model with only the context it needs, in a fixed and predictable flow. The project is judged by three things: results at least as good as plain Claude Code, a multi-agent flow, and fewer tokens.
+2. **Simple and cheap.** Each job goes to the right model with only the context it needs, in a fixed and predictable flow. The project is judged by three things: results at least as good as plain Claude Code, a multi-agent flow, and a lower cost and use of the 5-hour usage window (the same tokens on a cheaper model, or read from the cache, count as a saving).
 3. **Keep quality.** Deterministic checks (lint and tests), a strict review before every pull request, and a human who approves plans and merges pull requests.
 4. **From an idea to a project.** `cw new` starts a repository from one sentence and plans the whole thing, so a project can be built without touching the code.
 
@@ -35,9 +35,9 @@ There is no server, database, daemon or custom agent framework. Claude Code does
 |---|---|---|
 | **Session / context window** | One conversation with Claude. Everything in it is sent again on every turn, so it costs tokens on every turn. Parts that did not change are read from the prompt cache at about a tenth of the price. | The planner has one session per ticket; each worker has one session for all its tasks. |
 | **Resuming a session** | `claude -p --resume <id>` continues a session. Its history is still cached for a while, so continuing is cheap, and the agent keeps what it has read. | A worker's next task, a follow-up, a fix, an answer; the planner's next feedback round. |
-| **CLAUDE.md** | Instructions loaded into every session started in that folder. | A project's `CLAUDE.md` reaches every cw agent for free; cw keeps a short "Notes kept by cw" section in it (§6). |
+| **CLAUDE.md** | Instructions loaded into every session started in that folder. | A project's `CLAUDE.md` reaches every cw agent; cw no longer writes into it (workers' notes live in ticket records, §6). |
 | **Skill** | A folder with `SKILL.md`. Interactively, only its description is in context until it is needed. | `engineering`, `python-rules`, `pr-review`, `rule-precedence`, `ponytail`, `clean-code`, `bootstrap-project`. |
-| **Agent (subagent)** | A markdown file whose front matter sets `name`, `description`, `tools` and `model`, with the instructions in the body. `claude --agent <name>` runs a whole session as that agent. | `planner`, `worker`, `reviewer`, `onboarder`. |
+| **Agent (subagent)** | A markdown file whose front matter sets `name`, `description`, `tools` and `model`, with the instructions in the body. `claude --agent <name>` runs a whole session as that agent. | `planner`, `worker`, `reviewer`, `onboarder`, `context-sketcher`. |
 | **Hook** | A command Claude Code runs on an event (`PreToolUse`, `PostToolUse`, …). Exit code 2 sends its message to Claude; before a tool call it also blocks the call. It runs every time, unlike a skill, which is only advice. | `guard.py`, `rules_on_touch.py`, `ruff_on_edit.py`. |
 | **MCP server** | An external tool server. Each server's tool definitions cost context on every turn. | Only the project's own `.mcp.json`, when it has one (§9). |
 | **Plugin / marketplace** | A plugin bundles agents, skills, commands and hooks. A marketplace is a git repository listing plugins. | `toolkit/` with the `core` and `python` plugins. |
@@ -60,6 +60,10 @@ There is no server, database, daemon or custom agent framework. Claude Code does
 | **Step** | The resumable unit of the flow: `plan`, `work`, `review`, `pr`. It is recorded before it runs, so `cw resume` can always run it again. |
 | **Status** | Where the ticket is (§4.2). |
 | **Toolkit** | The local clone of the marketplace that cw loads into every run with `--plugin-dir`. |
+| **Context index** | A per-project SQLite file, `~/.cw/projects/<project>/context.sqlite3`: a searchable catalogue of the code at one commit, keyed by git blob, with the embeddings of its code and the records of finished tickets (§19). |
+| **Context seed** | The short list handed to the planner (or a direct ticket's worker) for one request: the most relevant files and definitions with line numbers, the similar finished tickets, and a folder outline, within a token budget. It replaces the repo map. |
+| **Ticket record** | What a finished ticket leaves for later tickets: its request, plan excerpt, changed files, open findings and workers' notes. Built without a model, kept in the index. |
+| **Channel** | One way the context engine finds code: keywords, paths, history, meaning (embeddings), the HyDE sketch, and the dependency graph. |
 
 ---
 
@@ -79,14 +83,16 @@ FRIDAY ──runs──► cw ──claude -p --agent …──► Claude Code �
   └───────────────┤ ~/.cw/config.json                       projects, models, limits, stacks
                   ├ ~/.cw/tickets/<project>/<id>.json + .md  tickets = state + the readable record
                   ├ ~/.cw/tickets/<project>/<id>.events.jsonl every agent start, tool call, end and check
-                  ├ ~/.cw/projects/<project>/repo_map.txt    the planner's map of the repository
+                  ├ ~/.cw/projects/<project>/repo_map.txt    the planner's map of the repository (fallback)
+                  ├ ~/.cw/projects/<project>/context.sqlite3 the context index: code, vectors, ticket records
                   ├ ~/.cw/projects/<project>/conventions.md  optional: onboarding's findings and decisions
+                  ├ Ollama at localhost:11434 ──► embeddings (qwen3-embedding), on your Mac
                   └ gh / Bitbucket REST ──► pull request, review comments, CI, merge
 ```
 
 Change the toolkit once, push it, and every teammate and every cw run uses the new version.
 
-**What cw writes into a project's repository:** only the agents' code changes and the "Notes kept by cw" section of its `CLAUDE.md`. Both are in the ticket's diff, reviewed and committed once. `.claude/settings.json` is written only when you ask (`cw project wire <name>`).
+**What cw writes into a project's repository:** only the agents' code changes, in the ticket's diff, reviewed and committed once. `.claude/settings.json` is written only when you ask (`cw project wire <name>`). The context index, the ticket records and the event logs live in `~/.cw` and are never committed.
 
 **The backend, file by file** (`backend/src/cw/`):
 
@@ -102,7 +108,15 @@ Change the toolkit once, push it, and every teammate and every cw run uses the n
 | `config.py` | `~/.cw/config.json`, validated on every run. |
 | `git.py` | The git commands cw needs. |
 | `git_hosts/` | GitHub (through `gh`) and Bitbucket Cloud (REST): PRs, reviews, threads, CI, merge. |
-| `project_memory.py` | The "Notes kept by cw" section of a project's `CLAUDE.md`. |
+| `project_memory.py` | Reads the old "Notes kept by cw" section of a project's `CLAUDE.md`, for `cw context migrate-notes`. |
+| `code_chunks.py` | One file's text → chunks, definitions, references and imports (Python's `ast`; other languages as a card). |
+| `context_index.py` | The SQLite context index: schema, blob ingestion, snapshots, embeddings, ticket records. Owns all its SQL. |
+| `context_search.py` | Ranking: the channels, rank fusion, the dependency graph and PageRank, and the rendered seed. |
+| `embeddings.py` | Ollama's `/api/embed`: queries with the task instruction, documents without; vectors cut and normalised. |
+| `context_engine.py` | The context engine at ticket time: refresh at start and finish, the seed (with the HyDE sketch), ticket records. |
+| `context_eval.py` | `cw context eval`: recall and MRR from finished tickets or from git history. |
+| `storage.py` | `cw gc`, event-log retention, project caches. |
+| `benchmark.py` | `cw audit` and `cw benchmark`: quality and cost per ticket, for comparing versions of cw. |
 | `repo_map.py` | The planner's map of a repository, made without an LLM. |
 | `onboarding.py` | `cw project add`, `cw new`, the optional onboarder, `cw project wire`. |
 | `toolkit.py` | Reads agents, skills and topics from the toolkit. |
@@ -128,29 +142,34 @@ you: prompt (terminal, FRIDAY or voice)        cw new <name> "<idea>" also creat
                                                            ├─ several changes? → cw split (one branch + PR each)
                                                            ├─ questions? → you answer
                                                            └─ plan + ordered tasks, each given to a worker → you approve
+                                       (the planner, or a direct ticket's first worker run, starts from the context seed)
                                                                       │
                                        S1 (W1) ─► S2 (W1, same session) ─► S3 (W2, new session) ─► S4 (W1) …
                                        a worker's question ─► planner answers ─► or you do
-                                       after every task: checks ─ broke? ─► one fix round by that worker
+                                       after every task: checks ─ broke? ─► up to 2 fix rounds by that worker
+                                                         ─ still broken? ─► one fresh session from its reflection
                                                          ─ still broken? ─► the ticket stops (BLOCKED)
  │
  ▼  READY: changes are uncommitted in your checkout · reply to adjust · cw review · or Park
 you: cw pr
  │
  ▼
-checks ─► reviewer (read-only, always) ─ blocking findings open? ─► fix round on every finding,
- │        re-review only the new diff (up to 2 rounds); cw decides from the severities
+checks ─► reviewer (Opus, read-only, always) ─ blocking findings open? ─► fix round on every finding,
+ │        re-review (Sonnet) only the new diff (up to 2 rounds); cw decides from the severities
  ▼
 cw: one commit → merge base (conflicts → worker → checks → review of those files) → push → open PR
  │        → post the review on it; no remote: stops after the commit; cw done merges it into the base
  ▼
-you or teammates comment on the PR → cw fix: the last worker addresses every open line comment and every
- │        open blocking finding → checks → review → new commit → push → summary posted → threads resolved
+you or teammates comment on the PR → cw fix: the last worker answers each open thread (fixed or declined)
+ │        and every open blocking finding → checks → one review (skipped for a small comment-only fix)
+ │        → new commit → push → summary posted → fixed threads resolved, declined ones get a reply
  │        → again while blocking findings stay open (up to 3 rounds)
  ▼
-you: cw merge → refused while CI has not passed on your commit or a blocking finding is open
+you: cw merge → refused while CI has not passed on your commit, a blocking finding is open,
+ │       or a PR thread is unresolved
          → squash-merge pinned to that commit → branch deleted there and locally → local base fast-forwarded
          → you are back on your previous branch     (or merge on the host yourself, then cw done)
+         → the index moves to the new base and the ticket's record is stored for later tickets
 ```
 
 ### 4.2 Ticket statuses
@@ -174,15 +193,15 @@ you: cw merge → refused while CI has not passed on your commit or a blocking f
 - The title is the prompt's first line; the id is the date, a slug and four random characters.
 - cw fetches the base branch (a failed fetch is a warning on the ticket: "pushing will fail the same way") and runs `git switch -c cw/<id> <base>`. It remembers the branch you were on, to return there later.
 - It starts the project's containers when it has a compose file (§4.4), then runs the **baseline**: each check once on the untouched base. A check that already fails is reported and never enforced, so no worker is sent to fix someone else's problem. Files the checks leave behind (a new lockfile, a report) are named in a warning, because they would otherwise end up in the commit.
-- It refreshes the planner's repo map.
+- It refreshes the planner's repo map, and brings the context index to the commit the ticket starts from (only files that changed since the last update are parsed). On the first ticket of a project it builds the index without embeddings and warns you to run `cw context build` once.
 - If the containers do not start, the ticket is not created and the checkout goes back to where it was.
 
 **2a. The direct route** (default)
-- Worker `W1` gets the whole ticket and "Do now: <your prompt>". On the first pass it is told: if this needs more than `escalate_file_threshold` (5) files or a plan, return `needs_plan` before editing. Then the ticket moves to the planned route, with the worker's reason given to the planner.
+- Worker `W1` gets the whole ticket, the context seed for the request (§19), and "Do now: <your prompt>". On the first pass it is told: if this needs more than `escalate_file_threshold` (5) files or a plan, return `needs_plan` before editing. Then the ticket moves to the planned route, with the worker's reason given to the planner.
 - After the worker, cw runs the checks. A check the ticket broke gets up to `max_fix_rounds` (2) fix rounds; if it still fails, the ticket is `ready` with a `Checks: now failing` warning, so you decide.
 
 **2b. The planned route** (`--plan`, or after an escalation)
-- The planner reads the request, the repo map and the code it needs, then answers with one of:
+- The planner gets the request and the context seed (§19) in place of the repo map: the files and definitions most likely to matter, similar finished tickets, and a folder outline. It is told to verify them, then reads the code it needs and answers with one of:
   - **split**: the request is several independent changes that each need their own branch or PR. The ticket waits; `cw split <id>` creates one paused ticket per change and abandons the original, without running an agent. `cw resume <new id>` plans each one.
   - **questions** (at most 3, at most `max_question_rounds` rounds): the ticket waits for your answer.
   - **a plan**: what changes and why, the options it rejected, an ordered task list (each task with its worker, complete instructions, its files and a `Done when:` line), and a **context pack** of 5–15 `path:lines` the workers should read first.
@@ -192,7 +211,7 @@ you: cw merge → refused while CI has not passed on your commit or a blocking f
 
 **3. Doing the tasks** (`cw approve`)
 - Tasks run in order. Each goes to its worker: a worker with a session continues it and gets only what other workers did since its last turn, plus its task; a worker without one gets the whole ticket.
-- **After every task cw runs the checks**, with the fix rounds above. In a task list, a check still failing after them stops the ticket (`blocked`), so the next task never builds on broken code. The cause is often outside the code (a missing setting, a database that is not running); the worker's summary says so. Fix it and `cw resume`: the task runs again, then the checks.
+- **After every task cw runs the checks**, with the fix rounds above. If a check still fails, the task's worker gets one fresh session that starts from its last attempt's reflection (`max_backoff_rounds`, 1), with fix rounds of its own. A check still failing after that stops the ticket (`blocked`), so the next task never builds on broken code. The cause is often outside the code (a missing setting, a database that is not running); the worker's summary says so. Fix it and `cw resume`: the task runs again, then the checks.
 - When the last task passes, the ticket is `ready`.
 
 **4. Questions on the way**
@@ -209,6 +228,8 @@ you: cw merge → refused while CI has not passed on your commit or a blocking f
 - The reviewer returns findings, each `blocking` or `minor`, and the ids of open findings the code now fixes. **cw decides from the severities**, not from a verdict.
 - Findings on files that do not exist are dropped; a line past the end of a file moves to its last line. Each finding gets a ticket-wide id.
 - While blocking findings are open and rounds are left (`max_review_rounds`, 2), the last worker gets every open blocking finding plus the round's minor ones, the checks run again, and the reviewer sees only the new diff.
+- **Every review after a ticket's first runs on `reviewer_followup`** (Sonnet by default): a re-review only checks a small fix against listed findings. The first review stays on the reviewer model (Opus).
+- Fix passes keep no project notes, and editing `README.md` or `CLAUDE.md` without a finding or comment naming them gets a `Scope: fix:` warning.
 - Findings still open after the last round stay on the ticket and go on the PR; you decide.
 
 **7. Opening the PR** (`cw pr`)
@@ -217,18 +238,20 @@ you: cw merge → refused while CI has not passed on your commit or a blocking f
 - **One commit**: everything since the base, WIP commits from parking included, is squashed into one commit with the ticket's message. Once the branch is pushed, later changes (`cw fix`, a second `cw pr`) are added as new commits; the squash merge folds them into one again.
 - cw merges the latest base into the branch. Conflicts go to the worker (`max_conflict_rounds`, 1); cw checks that no conflict markers are left, commits the merge, then runs the checks and reviews the resolved files before anything is pushed. A clean merge brings only the base's own reviewed work, so the review moves past it.
 - No remote: it stops after the commit (`pr_open`, with a warning); `cw done` merges the branch into the base.
-- Otherwise: push, open the PR (the description is built from the ticket: request, plan, what each pass did, the review), and post the review as line comments.
+- Otherwise: push, open the PR (the description is built from the ticket: request, plan, what each pass did, the review), and post the review as line comments. Each finding carries its id (`**blocking** [F3] …`), so a thread can be matched to its finding even when the text is reformatted.
 
 **8. Working off PR comments** (`cw fix`)
-- It reads the unresolved comment threads on lines of the PR (the reviewer agent's and people's) and the ticket's open blocking findings, and gives them all to the last worker in one instruction.
-- Then it runs the same steps as `cw pr`: checks, review, a new commit, push. It posts the worker's summary (which says why a comment needed no change) and resolves the threads it sent.
+- It reads the unresolved comment threads on lines of the PR (the reviewer agent's and people's) and the ticket's open blocking findings, and gives them all to the last worker in one instruction. Every thread is labelled with its id, and the worker answers each one: `fixed`, or `declined` with the reason.
+- Then it runs the same steps as `cw pr`, with **one** review per round (no review-and-fix loop inside it): checks, review, a new commit, push. It posts the worker's summary, resolves the `fixed` threads, and replies in each `declined` thread with the reason (starting with `cw · declined:`), leaving it open for a person. A thread with no answer stays open. A declined thread is not sent again until someone replies after cw.
+- **A small comment-only round skips the review**: when it addressed no open blocking finding (also none posted as a thread), the checks pass, and it changed at most `review_skip_max_changed_lines` (20) lines and no protected path. The summary says the review was skipped and why. `cw pr` never skips.
 - Only the first review of a PR is posted as line threads. Later reviews are posted as one comment, so cw's own re-reviews never feed the next round; their blocking findings stay open on the ticket instead.
 - It goes round again while blocking findings stay open, up to `max_pull_request_fix_rounds` (3), and stops after a round in which the worker changed nothing. Comments in the PR's general conversation are not read.
 
 **9. Merging** (`cw merge`)
-- It refuses while a blocking finding is open, while the ticket's branch has uncommitted changes, or while CI has not passed **on your local branch's commit**. A PR with no checks reported counts as passed only when the branch has no CI config (`.github/workflows`, `bitbucket-pipelines.yml`), so a merge right after a push waits for CI. On GitHub the PR's head must also be that commit.
+- It refuses while a blocking finding is open, while **any PR thread is unresolved** (the error lists which were declined by the worker and which were not addressed), while the ticket's branch has uncommitted changes, or while CI has not passed **on your local branch's commit**. The first review posts minor findings as threads too, so they also need `cw fix` or a person before the merge. A PR with no checks reported counts as passed only when the branch has no CI config (`.github/workflows`, `bitbucket-pipelines.yml`), so a merge right after a push waits for CI. On GitHub the PR's head must also be that commit.
 - It squash-merges on the host with the ticket's commit message, **pinned to that commit**: GitHub refuses the merge if the head moved; on Bitbucket cw compares the head just before merging.
 - It deletes the branch on the host, fast-forwards your local base branch (a warning if it has diverged), switches you back to your previous branch, deletes the local branch, refreshes the repo map and closes the ticket.
+- When a ticket finishes (`cw merge` or `cw done`), cw records `changed_files` (the ticket's own changes, not what it merged in from the base) and the merge commit, brings the context index to the tip of the base, and stores the ticket's record for later tickets. Event logs of tickets closed longer than `event_retention_days` (30) are removed.
 - Or merge on the host yourself and run `cw done`.
 
 **10. Park, resume, done, abandon**
@@ -248,7 +271,8 @@ you: cw merge → refused while CI has not passed on your commit or a blocking f
 - **A new project's agents write its `.env`.** `cw new` leaves `.env` off the protected paths, so the skeleton task writes working local values (random values for local secrets, never real ones). `.env` is gitignored; tests use their own database.
 - **Every repeat is capped** in `Limits`: fix and review rounds 2, question and conflict rounds 1, `cw fix` rounds 3; every agent has a turn cap and a time limit. Nothing loops by itself.
 - **A stop is never final.** Ctrl+C, FRIDAY's Stop, an error, a time limit or the usage limit leave the ticket `blocked` or `paused` with the step recorded, and `cw resume` continues.
-- **Project notes are capped**: at most two per worker run and five per ticket.
+- **Project notes are capped and stay with the ticket**: at most two per worker run and five per ticket. They go into the ticket's record, never into `CLAUDE.md`.
+- **The context engine never stops a ticket.** A missing, damaged or locked index, Ollama not running, or a failing HyDE sketch each adds a `Context:` warning; the ticket goes on with what still works, down to the repo map.
 
 ### 4.5 An example, end to end
 
@@ -276,6 +300,15 @@ you: cw merge → refused while CI has not passed on your commit or a blocking f
 | `cw approve / resume / review / pr / fix / merge <ticket>` | The steps of §4.3. |
 | `cw split / park / ci / done [--abandon] <ticket>` | Split into tickets; park; show CI; close. |
 | `cw status / show / events / stats / toolkit / config / doctor` | Views, each with `--json`. `cw config set` reads validated JSON on stdin. |
+| `cw project remove <name> [--purge] [--yes]` | Unregisters a project and deletes its rebuildable caches (index, repo map); `--purge` also deletes its decisions and tickets, after asking. |
+| `cw context build <project> [--prune]` | Builds the whole index at `HEAD`: every chunk embedded, every finished ticket recorded. |
+| `cw context status <project> [--json]` | Indexed commit, counts, size, model, embedded chunks, what `cw gc` would free. |
+| `cw context search <project> "<text>" [--no-hyde] [--json]` | Prints the seed the planner would get. |
+| `cw context eval <project> [--from-commits N] [--method …] [--yes] [--json]` | Recall and MRR of the seed, from finished tickets or git history (§19). |
+| `cw context migrate-notes <project>` | Copies the old "Notes kept by cw" section of `CLAUDE.md` into a ticket record. |
+| `cw gc [<project>] [--dry-run] [--json]` | Removes old index data and expired event logs, then shrinks the index file. |
+| `cw audit <ticket> [--json]` | One extra review of a ticket's final diff, for benchmarks; kept out of the ticket's cost. |
+| `cw benchmark <project> [--json]` | Cost per role, reviews per model, fix rounds, failing checks and audit results per ticket. |
 
 ---
 
@@ -289,6 +322,7 @@ All live in `toolkit/plugins/core/agents/*.md`. The `model` in each file is only
 | worker | sonnet | Read, Edit, Write, Bash, Grep, Glob | Implements one request, task or fix with the smallest change. Never touches tooling it wasn't asked about. Asks instead of guessing. | status (done / question / needs_plan / blocked) · summary · files · handoff · questions · project notes · commit message · reason |
 | reviewer | opus | Read, Grep, Glob | Applies `pr-review` and every rule that covers the changed files, strictly, to the diff only | summary · line comments (blocking / minor) · ids of open findings now fixed |
 | onboarder | sonnet | Read, Grep, Glob | **Optional.** Maps a repository: lint and test commands, architecture, tests, differences from the team rules | stack · commands · architecture · tests · differences · warnings |
+| context-sketcher | haiku | StructuredOutput only | Sketches, from the request, the stack and the folder names alone, where the change would land: the HyDE sketch (§19). Runs bare: no rules, plugins, hooks or repository | likely paths · likely names · 10–20 lines of plausible code |
 
 Every answer is forced into a JSON schema built from the pydantic models in `models.py` (`--json-schema`), so cw never parses free text.
 
@@ -296,10 +330,11 @@ Every answer is forced into a JSON schema built from the pydantic models in `mod
 
 | Agent | First prompt of a session | Resumed session |
 |---|---|---|
-| Worker | The ticket without status lines or reviews (request, answers, plan, tasks with what each finished one left behind), the files changed so far, the instruction, the context pack, the checks and which are its job, what is off limits, its limits | What other workers did since its last turn, then the instruction |
-| Planner (planning) | The request, the repo map, the "new project" brief when there is no code yet, your feedback, and the constraints (questions allowed or not, how many workers, one branch per ticket) | Your feedback and whether it may still ask |
+| Worker | The ticket without status lines or reviews (request, answers, plan, tasks with what each finished one left behind), the files changed so far, the instruction, on a direct ticket's first run the context seed, the context pack, the checks and which are its job, what is off limits, its limits | What other workers did since its last turn, then the instruction |
+| Planner (planning) | The request, the context seed (or the repo map when there is no seed), the "new project" brief when there is no code yet, your feedback, and the constraints (questions allowed or not, how many workers, one branch per ticket) | Your feedback and whether it may still ask |
 | Planner (answering a worker) | The ticket, then the worker's questions | The worker's questions |
-| Reviewer | Always a new session: the request, the plan, the workers' notes, the check results, the open findings, a note about cw's `CLAUDE.md` section when the diff has it, and the diff | — |
+| Reviewer | Always a new session: the request, the plan, the workers' notes, the check results, the open findings and the diff | — |
+| Context sketcher | The request, the project's stack and its folder names two levels deep; nothing from the repository | — |
 
 ---
 
@@ -331,17 +366,18 @@ The `.md` holds, in order: the request (all your prompts), questions and answers
 
 - **Worker sessions have a size limit.** When a run's average turn passes 45k tokens (cached and uncached together), that worker starts a fresh session next time, seeded from the ticket.
 - **Older tasks are shortened in a worker's view**: their summary is dropped, but their files and handoff stay, because later tasks build on them. The `.md` keeps everything.
-- **The planner hands over what it read**: the context pack points every new worker session at the right lines.
-- **The planner gets a repo map**: `~/.cw/projects/<project>/repo_map.txt`, made without an LLM from `git ls-files` (so `.gitignore` is respected): module docstrings, classes and function signatures for Python and Swift, at most 250 lines. When the full outline is too long it falls back to one line per file, then one line per folder, so no folder is dropped. It is refreshed at every ticket start, when a ticket is done or merged, and by `cw project map <name>`.
+- **The planner hands over what it read**: the context pack points every new worker session at the right lines, and must hold only lines the planner checked itself, not lines copied from the seed.
+- **The planner starts from a context seed made for the request** (§19), not from the whole repo map, and the seed's budget (2,500 tokens) is no bigger than the map it replaces.
+- **The repo map is the fallback**: `~/.cw/projects/<project>/repo_map.txt`, made without an LLM from `git ls-files` (so `.gitignore` is respected): module docstrings, classes and function signatures for Python and Swift, at most 250 lines. When the full outline is too long it falls back to one line per file, then one line per folder, so no folder is dropped. The planner gets it only when there is no seed (or `include_repo_map` is on). It is refreshed at every ticket start, when a ticket is done or merged, and by `cw project map <name>`.
 - **A resumed agent gets only what is new** (§5).
 
-### Memory across tickets: the project's CLAUDE.md
+### Memory across tickets: ticket records
 
-Claude Code loads a project's `CLAUDE.md` into every session in that folder, cw's agents included (checked with cw's isolation flags). So it is cw's memory across tickets, and it is cached.
-
-- A worker may return `project_notes`: a lasting fact a future session needs and cannot see quickly in the code (a command, where a kind of code lives, a decision and why, a trap). Usually it is empty; at most two per run.
-- cw adds new ones, without duplicates, to `## Notes kept by cw` in that file (at most five per ticket). The change is part of the ticket's diff, so the reviewer sees it (and is told it ships on purpose) and it is committed with the code. Past 40 notes the ticket warns you to prune the section.
-- A knowledge graph was considered and rejected: an agent pays tokens to walk it, and it saves nothing over a short map plus reading the right files.
+- A worker may return `project_notes`: a lasting fact a future session needs and cannot see quickly in the code (a command, where a kind of code lives, a decision and why, a trap). Usually it is empty; at most two per run and five per ticket. Fix passes keep none.
+- **cw no longer writes them into `CLAUDE.md`.** That file is loaded into every run of every agent, related or not, and the *Evaluating AGENTS.md* study found such context files raise cost without improving results. Notes now go into the ticket's **record** in the context index when it finishes, and come back only when the history channel finds the ticket similar to a new request (§19).
+- **Records are per person**: `~/.cw` lives on the machine that ran the ticket, so a teammate's cw does not see your records. That was the choice; a team that wants shared notes keeps them in the project's `CLAUDE.md` by hand.
+- An existing "Notes kept by cw" section is left alone; `cw context migrate-notes <project>` copies its lines into a record, once.
+- A knowledge graph to walk was considered and rejected: an agent pays tokens to walk it. The context engine's graph is different: cw uses it internally to rank files and never shows it to an agent.
 
 ---
 
@@ -394,16 +430,19 @@ The topics of one session never change, so a resumed session's system prompt sta
 | The external plugins the config names (`ponytail@ponytail` always, `pyright-lsp` for Python) | `enabledPlugins` in the run's own settings; they must be installed (`cw doctor` checks) |
 | The run's permissions | `--settings <tmp>/settings.json` |
 
+**The `context` role runs bare.** The HyDE sketch gets no rules file, no toolkit plugins (so no hooks), no external plugins, no MCP servers and only the `StructuredOutput` tool, and it runs in a temporary folder, so it loads no project `CLAUDE.md` and cannot read the code. That keeps it at about 1.8k input tokens (measured).
+
 **Never loaded:** your user settings (`~/.claude/settings.json`), your personal per-repo `.claude/settings.local.json`, your personal plugins, and your personal or claude.ai MCP servers. Measured on the first real run: a run that only said "hi" cost 36.9k tokens with the personal setup and 5.9k without. The toolkit's own plugins are switched off in `enabledPlugins` so a wired repository does not load them a second time from the marketplace.
 
 **Permissions:**
 - **Protected paths** (default `**/*.key`, `**/*.pem`, `**/secrets/**`) become `Read/Edit/Write` deny rules in every run, plus the guard for shell commands. `.env` is not on the list: agents may update it when a task adds or changes a setting. What is in it is then sent to the model, so keep production secrets out of it, or add `.env` to a project's protected paths.
 - **Worker shell commands.** The worker runs with `acceptEdits`. Bash is allowed only for the project's lint and test commands (also narrowed: cw drops a command's trailing folder arguments, so `ruff check src tests` also allows `ruff check <any path>`; a trailing file, which may be the script itself, is never dropped), `head` and `tail` for piping their output, read-only git (`status`, `diff`, `log`, `show`) and `extra_allowed_bash`. Anything else is denied in headless mode. The worker's prompt says so, and the planner writes `Done when:` with only those commands.
-- **Read-only agents.** Planner, reviewer and onboarder have no write tools.
+- **Read-only agents.** Planner, reviewer and onboarder have no write tools; the context sketcher has no tools at all.
 - **What the rules do not stop.** They see the command an agent runs, not what that command runs in turn. The worker may run the tests, and the tests run code the worker can write (a `conftest.py`), which could commit, read a protected path or reach the network. The rules keep a cooperative model on its path and stop mistakes; they are not a sandbox against hostile text in the repository or the prompt. If that matters, run the checks in a container with a read-only `.git` and no network.
 - **Secrets.** The Bitbucket token comes only from the environment and is removed from the environment agents run in.
 - **Your work is protected.** cw refuses to start or switch tickets when your checkout has uncommitted changes, and Abandon is only offered for that ticket's own branch.
-- **Two human checkpoints:** you approve plans, and you merge pull requests. cw merges only when you run `cw merge`.
+- **Two human checkpoints:** you approve plans, and you merge pull requests. cw merges only when you run `cw merge`, and never while a PR thread is unresolved.
+- **The context index stays on your Mac.** Embeddings are computed by your local Ollama; no code is sent anywhere for them. The index and records live in `~/.cw`, are never committed, and are rebuilt from git with `cw context build`.
 
 To give agents a team MCP server, put it in the project's `.mcp.json`. Every server costs context on every turn, so add only what the agents use.
 
@@ -428,10 +467,12 @@ claude -p --output-format stream-json --verbose
   --plugin-dir <toolkit>/plugins/core --plugin-dir <toolkit>/plugins/<stack>
   [--resume <session>]                the planner's, or the worker's, own earlier session
   < the prompt on stdin
+the context role: no --append-system-prompt-file, no --plugin-dir, no --mcp-config, cwd = a temporary folder
 cwd = the project checkout   env = yours without cw's secrets + project env + CW_RUN=1 + CW_PROTECTED_PATHS + CW_SHOWN_TOPICS
 ```
 
 - cw reads the stream line by line and logs every tool call (`worker · Edit src/app/routes/items.py`), which is what you see live in the terminal. It also appends each start, tool call, end and failure, labelled with the worker and task (`W2 · S3`), to `<id>.events.jsonl`, together with every check cw runs. `cw events <id> --json` prints the latest; FRIDAY follows a ticket through it, wherever the run was started.
+- `run_agent` takes an optional model that replaces the role's: follow-up reviews use it for `reviewer_followup`, and `cw audit` for the reviewer model.
 - The last `result` line carries the structured answer and the usage. The tokens of a failed run are recorded too, and each run carries its label, so cost can be shown per worker.
 - The process runs in its own process group with a time limit (`agent_timeout_minutes`). Ctrl+C, FRIDAY's Stop and the time limit kill the agent and everything it started.
 - **Errors.** Claude Code's own error text is kept. HTTP 429 or "usage/rate limit" makes the ticket `paused`. "No conversation found with session ID" means the session to resume is gone: cw starts a new one that gets the whole ticket. Any other failure makes the ticket `blocked` and keeps the session, so `cw resume` continues it instead of paying for a fresh one.
@@ -441,7 +482,8 @@ cwd = the project checkout   env = yours without cw's secrets + project env + CW
 ## 11. Tickets, events and history
 
 - One JSON file, one markdown file and one events file per ticket in `~/.cw/tickets/<project>/`. The JSON is written through a temporary file, so FRIDAY never reads half of it.
-- A ticket holds: status, route, branch, the branch it started from and goes back into, every prompt, questions and answers, plan, tasks with their worker, what each worker pass left behind, reviews, open findings, the baseline, warnings, PR, the recorded step and error, and every run's token usage, label and `session_id`.
+- A ticket holds: status, route, branch, the branch it started from and goes back into, every prompt, questions and answers, plan, tasks with their worker, what each worker pass left behind, reviews, open findings, the baseline, warnings, PR, the recorded step and error, every run's token usage, label and `session_id`, and for the context engine its stored seed (`context_seed`, `seed_files`), `changed_files`, `merge_commit`, the `cw fix` round count and an optional `audit`.
+- **Event logs expire**: a closed ticket's `.events.jsonl` is deleted after `storage.event_retention_days` (30); its `.json` and `.md` stay. FRIDAY shows "Activity log removed" for such a ticket.
 - **History:** closed tickets stay there. FRIDAY lists them under Closed; `cw show <id>` prints the markdown.
 - **Agent transcripts:** Claude Code keeps its own session logs, so `claude --resume <session_id>` in the project reopens any run.
 
@@ -460,12 +502,18 @@ Validated on every run; unknown keys are rejected. FRIDAY saves through `cw conf
 | `defaults` / `projects[].profile` | model per agent, `worker_permission_mode`, `reviewers`, and `limits` |
 | `limits` | below |
 | `projects[]` | name, path, base branch, remote, stack, git host, lint and test commands, protected paths, extra allowed shell prefixes, environment (`{ticket}` is replaced by the ticket id), `compose_file` |
+| `context` | the context engine's settings and `context.embeddings` for Ollama (§19) |
+| `storage` | `max_index_mb` (1024: above it cw warns to run `cw gc`) and `event_retention_days` (30) |
+
+**Every key added since 2026-11-19 has a default**, so an older `config.json` loads unchanged, and FRIDAY saves by writing only the keys it edits into the JSON it read, so it never drops a key it does not know.
 
 **Shipped defaults** (a project keeps the profile it was added with; FRIDAY's **Apply models & limits to all projects** updates them):
 
 | Limit | Default | What it caps |
 |---|---|---|
-| models | planner opus, worker sonnet, reviewer opus, onboarder sonnet | |
+| models | planner opus, worker sonnet, reviewer opus, onboarder sonnet, `reviewer_followup` sonnet, `context` haiku | |
+| `review_skip_max_changed_lines` | 20 | lines a comment-only `cw fix` round may change and skip its review (0 never skips) |
+| `max_backoff_rounds` | 1 | fresh worker sessions, from the last attempt's reflection, for a task whose checks still fail |
 | `max_review_rounds` | 2 | fix-and-re-review rounds after blocking findings |
 | `max_fix_rounds` | 2 | fix rounds after a check breaks |
 | `max_pull_request_fix_rounds` | 3 | `cw fix` passes |
@@ -477,7 +525,7 @@ Validated on every run; unknown keys are rejected. FRIDAY saves through `cw conf
 | `max_diff_chars` | 60000 | the diff sent to the reviewer (it reads the files for the rest) |
 | `max_check_output_chars` | 4000 | check output sent back to a worker |
 | `agent_timeout_minutes` / `check_timeout_minutes` | 45 / 15 | one agent run / one check |
-| `max_turns` | planner 40, worker 70, reviewer 30, onboarder 60 | turns per run |
+| `max_turns` | planner 40, worker 70, reviewer 30, onboarder 60, context 1 | turns per run |
 
 Which skills are pinned is decided in the toolkit (`pin: true`), not here, so the whole team gets the same rules. Secrets come only from the environment (`BITBUCKET__EMAIL`, `BITBUCKET__API_TOKEN`).
 
@@ -508,6 +556,8 @@ That holds only between the CLI and the SDK, which run the same harness. A local
 7. **One reviewer, re-reviewing only the new diff**, with open findings carried by id.
 8. **Caps on every loop, no router agent, and workers that take turns.**
 9. **Sessions that grow too big start fresh** (45k tokens a turn), and lost sessions are replaced only when they really are gone.
+10. **Cheaper reviews** (2026-11-19). Reviews were 47% of the cost of the 13-ticket test ($4.21 of $9.04): `cw fix` now reviews once per round instead of running a review loop inside each, re-reviews run on Sonnet, and a small comment-only round skips its review.
+11. **A seed instead of the repo map** (§19): the planner's first prompt does not grow, and it should explore less on a large repository. HyDE costs about $0.0005 a ticket; embeddings run locally and cost no Claude usage.
 
 **Measured:**
 
@@ -521,13 +571,13 @@ That holds only between the CLI and the SDK, which run the same harness. A local
 
 Real tickets since (each in `CHANGES_AND_ISSUES.md`): a one-file test on Haiku, $0.015; an 11-file, 2-task change, about $1.47; tic-tac-toe from nothing (6 tasks, 4 workers), $2.49; a FastAPI expense tracker from nothing (17 tasks, 3 workers, 65 tests), about $8.06.
 
-**Not measured yet:** the cost of the larger pinned rules since 2026-11-16 (about 9k tokens per agent, cached after the first turn), and every change of 2026-11-18. Measure with `cw stats` and `cw show <id> --json` (`runs`: tokens and turns per run). A run's `cost_usd` is what Claude Code reports, which for a resumed session is the session's total so far; `cw stats` subtracts the session's previous run, so each run is counted once.
+**Not measured yet:** the cost and quality effect of the 2026-11-19 changes on real tickets (run the benchmark, `BENCHMARK.md`), the cost of the larger pinned rules since 2026-11-16 (about 9k tokens per agent, cached after the first turn), and every change of 2026-11-18. Measure with `cw stats` and `cw show <id> --json` (`runs`: tokens and turns per run). A run's `cost_usd` is what Claude Code reports, which for a resumed session is the session's total so far; `cw stats` subtracts the session's previous run, so each run is counted once.
 
 ---
 
 ## 15. FRIDAY
 
-A window over cw, redesigned on 2026-11-18 around the agents. It only runs `cw` (through a login shell, so it sees the same `PATH` as your terminal) and reads its `--json` output: `config`, `project list`, `status`, `show`, `events`, `stats`, `toolkit` and `doctor`. `cw … --json` is its contract: a field added in `models.py` or `config.py` needs a default, and `Models.swift` if the app shows it.
+A window over cw, redesigned on 2026-11-18 around the agents. It only runs `cw` (through a login shell, so it sees the same `PATH` as your terminal) and reads its `--json` output: `config`, `project list`, `status`, `show`, `events`, `stats`, `toolkit` and `doctor`. `cw … --json` is its contract: a field added in `models.py` or `config.py` needs a default, and `Models.swift` if the app shows it. Saving settings merges FRIDAY's edits into the config JSON it read, so keys it does not model survive.
 
 | Area | What it does |
 |---|---|
@@ -539,7 +589,7 @@ A window over cw, redesigned on 2026-11-18 around the agents. It only runs `cw` 
 | Next step | One sentence on what happens next and the buttons the status allows |
 | Composer | Answers, plan feedback and follow-ups, typed or dictated |
 | Activity, Usage | Every command FRIDAY ran, with output and Stop; tokens and cost per project and role |
-| Settings | Health (`cw doctor --json`), the `cw` path, voice and look, the toolkit, and the models, turn caps and limits new projects copy |
+| Settings | Health (`cw doctor --json`, including FTS5, Ollama and each project's index), the `cw` path, voice and look, the toolkit, and the models (follow-up reviewer and HyDE sketch included), turn caps and limits new projects copy |
 
 Polling: the ticket list every 3 seconds, the open ticket and its events every 2 seconds while it runs and every 8 otherwise. `friday/test.sh` runs tests that decode real `cw` output (`friday/Tests/FridayTests/Fixtures`, made by `make_fixtures.py`) and check the stages, agents, costs and actions; `Friday --snapshot <fixtures> <folder>` draws the main screens into PNG files.
 
@@ -547,7 +597,7 @@ Polling: the ticket list every 3 seconds, the open ticket and its events every 2
 
 ## 16. Verified, and not verified
 
-**Verified by tests that run the real cw code with a stand-in for `claude`** (`cd backend && uv run pytest`, 106 tests):
+**Verified by tests that run the real cw code with a stand-in for `claude`** (`cd backend && uv run pytest`, 167 tests):
 - a project created from an idea, planned, approved, built in two tasks, reviewed, committed once and merged by `cw done`, through the command line;
 - related tasks continue one worker session, another worker gets a new one and is told what happened; plan feedback resumes the planner with only the feedback;
 - a worker's question is answered by the planner; one the planner cannot answer goes to you and your reply reaches the worker;
@@ -559,12 +609,18 @@ Polling: the ticket list every 3 seconds, the open ticket and its events every 2
 - `cw fix` sends the open threads and open blocking findings to the last worker, pushes, posts the summary, resolves the threads, goes round again while blocking findings stay open, and stops after a round with no change;
 - a blocking finding stays open until a review names it fixed; findings on missing files are dropped;
 - `cw merge` refuses while a blocking finding is open or CI has not passed, expects CI checks when the branch has CI config, passes the checked commit to the host, and otherwise merges, fast-forwards the local base, closes the ticket and deletes the branch; with `gh` and the Bitbucket API stubbed, both hosts count "no checks" as passed only without CI config, and refuse a head that moved;
-- a run loads only the project's settings and its `.mcp.json`; the guard, the rules hook, the topic index and the ruff hook; time limits kill a command and everything it started; `cw stats` counts a resumed session once; project notes are capped.
+- a run loads only the project's settings and its `.mcp.json`; the guard, the rules hook, the topic index and the ruff hook; time limits kill a command and everything it started; `cw stats` counts a resumed session once; project notes are capped and never reach `CLAUDE.md`;
+- **pull requests (2026-11-19):** `cw merge` refuses with an unresolved thread and names the declined ones; a declined comment gets a reply, stays open and is not sent again until a person answers; a fixed one is resolved, one without an answer stays open; a `cw fix` round reviews once; every review after the first runs on `reviewer_followup`; a small comment-only fix skips its review, a big one, one with failing checks, one with skipping off, or one that fixes a blocking finding posted as a thread (matched by its `[F…]` label) does not; a fix pass keeps no notes and warns about an unasked `README.md` edit but not a test file; `gh` and Bitbucket thread replies and last comments, with the hosts stubbed;
+- **context engine:** term splitting, chunking (every parameter kind, relative imports, syntax errors), FTS5 keeping `transfer_funds` whole, only changed blobs parsed and a rename parsing nothing, ignored folders and protected paths left out, a project in a subfolder indexed with paths relative to it, ranking a named function's file first, PageRank against hand-computed values, a hub not outranking the matched file, the seed's budget and determinism, the planner getting the seed and layout instead of the repo map, a corrupt index giving a warning and the repo map, `finish` indexing the base's tip and storing a record (not on abandon), `changed_files` leaving out what the base brought in, the history leakage rule, the current ticket excluded and open findings shown only on seed files, the query instruction on queries only, batching, `num_ctx`, unit vectors, the vector cache and re-embedding on a model or dimension change, the `max_incremental_files` cap, the dense channel finding a file without shared words, Ollama down giving a seed from the other channels, a model not pulled, the HyDE sketch feeding both channels and running once, a failing sketch still giving a seed, the context role running bare, a direct ticket's seed once and its reuse on escalation, eval from tickets (created files left out, real snapshot untouched) and from commits (parents as bases), gc keeping retained trees and an open ticket's base and freeing the rest, `--dry-run`, VACUUM shrinking the file, event-log retention, the size warning, the index never inside the checkout, `migrate-notes` once, `project remove` with and without `--purge`, and the audit kept out of a ticket's runs. Tests never call Ollama or `claude`: both are stubbed, and the test config points `claude_binary` at a path that does not exist.
+
+**Checked for real on 2026-11-19, on this Mac with Ollama and `qwen3-embedding:8b-q8_0`:** related code embeds at 0.96 against 0.40 for unrelated code, and a money-transfer query scores 0.74–0.75 on the two money functions and 0.20 on an unrelated one, so the query format and pooling work; a full `cw context build` of this repository (58 files, 492 chunks) took 330 s, **about 1.5 chunks a second**, for a 4.8 MB index; `cw context search` takes about half a second; `cw context eval --from-commits 40` on this repository scored 12 commits (table in §19); one real HyDE sketch on Haiku ran bare in about 1.8k input tokens for about $0.0005, also with one turn.
 
 **Verified on real projects with the real Claude Code and GitHub, on 2026-11-16 and 17:** three tickets on an existing repository and two projects from nothing (tic-tac-toe, an expense tracker); resumed worker and planner sessions; PRs opened and reviewed on GitHub; `cw fix` and `cw merge` end to end. On 2026-11-18 the real CLI confirmed the lost-session message, and that a project's `CLAUDE.md` still reaches an agent with `--setting-sources project`.
 
 **Not verified:**
-- anything changed on 2026-11-18 on a real ticket: the outside review's fixes, B9, B10, B13, B14, the isolation change, the new FRIDAY;
+- anything changed on 2026-11-18 or 19 on a real ticket: the outside review's fixes, B9–B14, the isolation change, the new FRIDAY, the pull request changes and the context engine; the token benchmark has not been run (`BENCHMARK.md`);
+- the GitHub GraphQL `addPullRequestReviewThreadReply` call and the `lastComment` field against a real pull request;
+- retrieval quality on Swift, Java or other languages without a graph, and on repositories larger than this one;
 - that the rules hook's message reaches the agent as intended after a Read;
 - FRIDAY by hand against a live run, dictation, speech and Stop;
 - all of the Bitbucket side against a real server (`POST …/comments/{id}/resolve` comes from Atlassian's community answers);
@@ -576,12 +632,11 @@ Polling: the ticket list every 3 seconds, the open ticket and its events every 2
 - `cw review` on a ticket whose PR is open sets it back to `ready`, and `cw merge` then refuses. Run `cw pr` again, then `cw merge`;
 - a planned ticket's commit and squash message is the first task's message, not one for the whole change.
 
-**Open from the outside review of 2026-11-18** (B1–B10 and B13–B15 are fixed):
-- B11: `cw fix` resolves every thread it sent, also people's threads the worker declined;
+**Open from the outside review of 2026-11-18** (B1–B11 and B13–B15 are fixed):
 - B12: onboarding again overwrites the decisions in `conventions.md`;
 - B16–B21: Bitbucket review posting, task ids on re-planning, a non-atomic project lock, `tail -f` allowed for workers, `cw done` without a remote, and a stray `skills/` file in the repository.
 
-**Known limits:** one open ticket per project; no Java stack plugin; the toolkit isn't published.
+**Known limits:** one open ticket per project; no Java stack plugin; the toolkit isn't published; the dependency graph is Python-only; ticket records are per person; the first embedding build of a large repository is slow on this Mac (§19).
 
 ---
 
@@ -665,6 +720,20 @@ Each change below came from a real run or a review. The details, with every bug'
 | **B14: only a really lost session starts fresh** (checked against the real CLI) | Any run that printed no result threw the session away and paid full price; a session that was really gone blocked the ticket instead |
 | **Runs load only the project's settings and `.mcp.json`** | `.claude/settings.local.json` (personal) was still read, and the project's own MCP servers were blocked |
 
+### 2026-11-19 · Review cost, a pull request merge gate, and the context engine
+
+| Change | Why |
+|---|---|
+| **One review per `cw fix` round**, **re-reviews on Sonnet**, **small comment-only fixes skip the review** | Reviews were 47% of the 13-ticket test's $9.04, and one ticket made 7 reviewer runs because each `cw fix` round ran a review loop |
+| **`cw merge` refuses with an unresolved PR thread**; the worker answers each comment `fixed` or `declined`; declined ones get a reply and stay open (B11) | Unaddressed comments could be merged; `cw fix` resolved even the comments the worker refused |
+| **Findings carry their id in the PR** (`[F3]`) and are matched by it | Matching by text broke when a comment was reformatted, which could let a review be skipped on a blocking finding |
+| **Fix passes keep no notes and leave `README.md` / `CLAUDE.md` alone unless asked**; the README review rule fires only when the diff changes something the README documents | Every fix round edited those files |
+| **The context engine** (§19): a per-project index, keyword, path, history, embedding and HyDE channels, a graph channel, a seed instead of the repo map, ticket records | Planners explored large repositories on their own; notes in `CLAUDE.md` were sent to every run |
+| **Notes move to ticket records** | Context files raise cost without improving results (*Evaluating AGENTS.md*) |
+| **`cw gc`, event-log retention, project caches removed with the project** | Blob-keyed caches grow without a limit |
+| **`cw audit` and `cw benchmark`**, and the eval's `--from-commits` | Cost alone cannot show whether quality dropped; 10 finished tickets are too few to measure retrieval |
+| **Every new setting has a default; FRIDAY saves by merging** | Required new fields would have broken every existing config, and FRIDAY dropped keys it did not know |
+
 ### Research branches
 
 `main` stays as it is. Each idea from a research paper gets its own `feature/<paper>` branch, judged by the goal in §1. `feature/react` (pushed, not tried on a real project) adds one back-off step: when a task's checks still fail after its fix rounds, a fresh worker session starts from the last attempt's reflection.
@@ -697,3 +766,97 @@ Each change below came from a real run or a review. The details, with every bug'
 - [anthropics/skills](https://github.com/anthropics/skills): Anthropic's own skills, for interactive sessions; cw runs do not load them.
 - [anthropics/claude-plugins-official](https://github.com/anthropics/claude-plugins-official), [obra/superpowers](https://github.com/obra/superpowers), [wshobson/agents](https://github.com/wshobson/agents), [affaan-m/everything-claude-code](https://github.com/affaan-m/everything-claude-code): public marketplaces to borrow from.
 - Stack: [pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/), [uv](https://docs.astral.sh/uv/), [git switch](https://git-scm.com/docs/git-switch), [SwiftUI](https://developer.apple.com/documentation/swiftui), [Speech](https://developer.apple.com/documentation/speech), [GitHub CLI](https://cli.github.com/manual/), [Bitbucket Cloud REST API](https://developer.atlassian.com/cloud/bitbucket/rest/).
+
+---
+
+## 19. The context engine
+
+**What it is for.** On a large repository the planner used to explore on its own with Grep and Read, starting from a repo map that degrades to one line per folder. The context engine gives it, for each request, a short ranked list of the code most likely to matter, plus similar finished tickets, so it reads the right files first. A direct ticket's first worker run gets the same list. It never blocks a ticket, never sends code off your Mac, and never writes into the project's repository.
+
+### 19.1 The index
+
+One SQLite file per project, `~/.cw/projects/<project>/context.sqlite3`. It describes the code **at a commit** (the ticket's base), never your uncommitted files.
+
+1. **List the files**: `git ls-tree` at the commit, run in the project folder so paths are relative to it, gives each file's **blob SHA** (git's fingerprint of its exact content). Only code files are kept (`.py`, `.swift`, `.js`, `.ts`, `.go`, `.rs`, `.java`, …), without ignored folders (`.venv`, `node_modules`, …), protected paths or files over `max_file_bytes`.
+2. **Skip what is known**: a blob already in the index was parsed before, at any path or commit. After the first build, only files a ticket changed are read.
+3. **Parse**: Python through its syntax tree (`ast`): a card for the file (docstring and top-level names), a chunk per class, function and method with its full signature, line range, first docstring line and code; the names it defines, the names it uses, and the modules it imports (relative imports resolved). Other languages get only a card, so no graph edges.
+4. **Keywords**: each chunk's names and text split into terms (`transfer_funds` → `transfer_funds`, `transfer`, `funds`), stored in SQLite FTS5 with `_` kept inside a term.
+5. **Embed**: each chunk, as a header (path, name and signature, docstring) plus its code, becomes a vector through Ollama (`qwen3-embedding:8b-q8_0`, the leading 1024 of 4096 values, renormalised). Vectors are cached by a hash of that text and by the model and dimensions, so nothing is embedded twice and a model change never mixes vectors.
+6. **Records**: each finished ticket's record (request, plan excerpt, changed files, open findings, notes) with its own terms and vector.
+
+**When it updates:** at every ticket start (to the base commit; the first time without embeddings, with a warning to run `cw context build` once), and when a ticket finishes (to the tip of its base, then the record is stored). An automatic update embeds only when at most `max_incremental_files` (20) files lack vectors, so a ticket waits at most a minute or two; above that it skips embedding and warns you to run `cw context build`, and keywords, paths, history and the graph still work. If Ollama is down, the update skips embedding with Ollama's reason, and the ticket's record is still stored. `cw context build` embeds everything, shows progress, and keeps what it finished if you stop it.
+
+### 19.2 Building a seed
+
+For one request, at ticket start:
+
+1. **HyDE sketch.** The `context-sketcher` agent (Haiku, bare, one turn) guesses, from the request, the stack and the folder names, the likely paths, names and 10–20 lines of code. It is only used to search, never shown.
+2. **Six ranked lists**, one per channel:
+
+| Channel | Compares | Finds best |
+|---|---|---|
+| Keywords | The request's terms, plus the sketch's guessed names, against every chunk's terms (BM25) | Code using the request's words |
+| Paths | The request's terms against the words in file paths | `services/statements.py` for "statements" |
+| History | The request against finished tickets that ended **before** this ticket started, by keywords and by meaning; then the files they changed | Files that changed together before |
+| Meaning: request | The request's vector (with Qwen3's task instruction) against every chunk's vector | Code that does what is described, in other words |
+| Meaning: sketch | The sketch's vector against every chunk's vector | Code that looks like the change |
+| Graph | Personalized PageRank over "this file uses that file" (names used and imports), each edge also running backwards at half its weight, starting from the other channels' results | Files the found files depend on, and the files that call them |
+
+3. **Fusion.** Each list gives each file `weight / (60 + its place)`; the totals rank the files. Agreement between channels beats one channel's favourite, and raw scores never need comparing. The graph is one channel among the others, not the final order, so files everyone imports do not crowd out the files that matched.
+4. **The seed**: a folder outline (two levels, with code-file counts), then the top files with their most relevant definitions and line ranges, then the similar tickets with their notes and the open findings they left on files in the seed, all within `seed_max_tokens` (2,500), whole blocks only. When there are similar tickets, `seed_ticket_tokens` (500) of the budget is kept for them, so file blocks can never squeeze out the notes they carry. It is built once per ticket and stored on it, so a fresh planner session after a lost session, or a planner after an escalation, reuses it without a second sketch. Its file list is kept as `seed_files`.
+
+The planner is told the list is a starting point to verify, not a verdict, and its `context_pack` must point only to lines it checked itself.
+
+### 19.3 When something fails
+
+| Failure | What you see | What still works |
+|---|---|---|
+| No index yet | `Context:` warning to run `cw context build` | Keywords, paths, history, graph |
+| Ollama not running, model not pulled, timeout | `Context:` warning | Everything except the meaning channels |
+| HyDE sketch fails | `Context:` warning | Everything except the sketch |
+| Index corrupt or locked | `Context:` warning | The repo map |
+| `cw context build` with Ollama down | The build stops with Ollama's reason | Nothing changes |
+
+### 19.4 Measuring it
+
+`cw context eval <project>` replays changes and checks whether the files they really changed are near the top of the seed (recall at 5, 10 and 20, and MRR), for each method: `planner` (what the planner picked, tickets only), `lexical`, `lexical+graph`, `+history`, `+dense` and `full` (with HyDE, which asks first since it runs a sketch per sample).
+
+- **From tickets** (the default): each finished ticket's request, scored against the code at its base. Tickets from before `changed_files` existed use their workers' file lists and count as approximate.
+- **From history** (`--from-commits N`): the last `N` commits of the base branch, each scored at its parent with its message as the request. Commits cw tickets produced are skipped, since their records would give the answer.
+- Files a change created are left out (no search can find them), only tickets that had finished earlier are used, and the real snapshot is never touched.
+
+First real numbers (this repository, 12 commits, terse commit messages as requests):
+
+| Method | R@5 | R@10 | R@20 | MRR |
+|---|---|---|---|---|
+| lexical | 0.42 | 0.52 | 0.61 | 0.58 |
+| lexical+graph, forward edges only | 0.33 | 0.54 | 0.65 | 0.53 |
+| lexical+graph, reverse edges at 0.5 (default) | 0.44 | 0.56 | 0.65 | 0.57 |
+| +dense (forward edges only) | 0.45 | 0.55 | 0.66 | 0.61 |
+
+Twelve samples are too few to tune on. Re-run it on a larger repository before changing `graph_weight`, `pagerank_damping` or the model.
+
+**Quality and cost together**: `cw audit <ticket>` gives a merged ticket's final diff one more review with the reviewer model and stores the blocking count on the ticket (not in its runs or cost); `cw benchmark <project>` lists per ticket the cost per role, reviews per model, `cw fix` rounds, failing checks, findings left and the audit. `BENCHMARK.md` is the procedure.
+
+### 19.5 Disk and cleanup
+
+Keying by blob keeps every old version and its vectors until something removes them. `cw gc [<project>] [--dry-run]` (a dry run takes no lock, so it works while a ticket runs) deletes what no **retained tree** needs (the current snapshot, the base branch local and remote, and the branch every open ticket targets), vectors of another model or dimension, and event logs of tickets closed longer than `event_retention_days`; ticket records are kept. Then it shrinks the file (`VACUUM`). It runs on its own after `cw context build` and `cw context eval` (index part) and when a ticket finishes (event logs), never at ticket start. Past `max_index_mb` the ticket, `cw context status` and `cw doctor` warn. `cw project remove` deletes the index and repo map too; `--purge` also deletes the decisions and tickets. `cw context build --prune` and a rebuild after a format change keep the ticket records, which nothing else could rebuild.
+
+### 19.6 Settings (`context` in `config.json`)
+
+| Setting | Default | What it controls |
+|---|---|---|
+| `include_repo_map` | `false` | Also send the repo map when a seed exists |
+| `seed_max_tokens` · `seed_ticket_tokens` · `max_seed_files` · `max_symbols_per_file` · `layout_max_folders` | 2500 · 500 · 15 · 6 · 60 | The seed's size, and the part kept for similar tickets |
+| `lexical_top_k` · `embeddings.dense_top_k` · `max_query_terms` | 60 · 60 · 60 | Chunks taken from each search; terms taken from a request and its sketch |
+| `fusion_k` · `graph_weight` · `history_weight` | 60 · 1.0 · 1.0 | Fusion |
+| `pagerank_damping` · `pagerank_iterations` · `import_edge_weight` · `reverse_edge_weight` | 0.85 · 30 · 2.0 · 0.5 | The graph; the reverse weight lets callers of found code rise (0 turns it off) |
+| `max_file_bytes` · `max_chunk_chars` | 400000 · 6000 | What is indexed |
+| `max_similar_tickets` · `record_plan_chars` · `hyde_max_chars` | 3 · 1200 · 2000 | History and the sketch |
+| `eval_k_values` · `eval_max_truth_files` | [5, 10, 20] · 20 | The eval |
+| `embeddings.model` · `dimensions` · `context_length` | `qwen3-embedding:8b-q8_0` · 1024 · 8192 | The embedding model; `context_length` is Ollama's `num_ctx`, so long chunks are not cut silently |
+| `embeddings.query_template` · `query_instruction` | from the Qwen3-Embedding model card · a code-search instruction | How queries are phrased |
+| `embeddings.batch_size` · `request_timeout_seconds` · `keep_alive` · `max_incremental_files` | 32 · 300 · 10m · 20 | Ollama calls; above 20 files without vectors, ticket time leaves embedding to `cw context build` |
+
+**Speed on this Mac**: the 8B model embeds about 1.5 chunks a second, so a first build of a repository with 30,000 chunks would take hours. If that is too slow, `qwen3-embedding:4b` or `:0.6b` is a settings change (`embeddings.model`); the next build re-embeds, and the eval shows what quality it costs.
+

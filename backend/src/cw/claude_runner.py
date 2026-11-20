@@ -34,6 +34,7 @@ SAFE_GIT_PREFIXES = ("git status", "git diff", "git log", "git show")
 PIPE_PREFIXES = ("head", "tail")
 PROTECTED_TOOLS = ("Read", "Edit", "Write")
 ERROR_TAIL_CHARS = 2000
+BARE_ROLES = (AgentRole.CONTEXT,)
 RESULT_EVENT = "result"
 ASSISTANT_EVENT = "assistant"
 TOOL_USE_BLOCK = "tool_use"
@@ -111,6 +112,8 @@ def _build_run_settings(settings: Settings, project: Project, role: AgentRole) -
     }
     stack = settings.stack(project.stack)
     external = settings.toolkit.always_external_plugins + (stack.external_plugins if stack else [])
+    if role in BARE_ROLES:
+        external = []
     return {
         "permissions": {"allow": allow, "deny": deny},
         "enabledPlugins": own_plugins | {plugin: True for plugin in external},
@@ -206,6 +209,7 @@ def run_agent[T: BaseModel](
     files: list[str] | None = None,
     new_project: bool = False,
     label: str = "",
+    model: str | None = None,
 ) -> tuple[T, RunUsage]:
     """Run a toolkit agent headlessly and return its validated structured result and usage.
 
@@ -213,7 +217,7 @@ def run_agent[T: BaseModel](
     `new_project` adds the rules for starting a project. Both are the same for every run of a session,
     so the system prompt of a resumed session never changes and its cache stays valid.
     `label` names the run in the ticket's events (W2 · S3, a reviewer); every start, tool call, end and failure is
-    recorded there.
+    recorded there. `model` replaces the role's configured model for this run.
     """
     label = label or agent_name
 
@@ -234,6 +238,7 @@ def run_agent[T: BaseModel](
             files,
             new_project,
             record,
+            model,
         )
     except AppException as error:
         if error.usage:
@@ -267,10 +272,11 @@ def _run_agent[T: BaseModel](
     files: list[str] | None,
     new_project: bool,
     record: Callable[[dict], None],
+    model_override: str | None,
 ) -> tuple[T, RunUsage]:
     """Run the agent once and parse its result; `run_agent` records the run's events around it."""
     agent = load_agent(settings, agent_name)
-    model = _model_for(project, role)
+    model = model_override or _model_for(project, role)
     max_turns = _max_turns_for(project, role)
     definition = {"description": agent.description, "prompt": agent.prompt, "model": model, "maxTurns": max_turns}
     if agent.tools:
@@ -281,8 +287,9 @@ def _run_agent[T: BaseModel](
         agents_file.write_text(json.dumps({agent.name: definition}))
         settings_file = Path(folder) / "settings.json"
         settings_file.write_text(json.dumps(_build_run_settings(settings, project, role)))
+        bare = role in BARE_ROLES
         rules_file = Path(folder) / "rules.md"
-        rules, shown_topics = _rules_prompt(settings, project, agent.skills, files, new_project)
+        rules, shown_topics = ("", []) if bare else _rules_prompt(settings, project, agent.skills, files, new_project)
         rules_file.write_text(rules)
         command = [
             settings.claude_binary,
@@ -296,8 +303,6 @@ def _run_agent[T: BaseModel](
             agent.name,
             "--settings",
             str(settings_file),
-            "--append-system-prompt-file",
-            str(rules_file),
             "--json-schema",
             json.dumps(output_model.model_json_schema()),
             "--permission-mode",
@@ -308,10 +313,12 @@ def _run_agent[T: BaseModel](
             "--setting-sources",
             ISOLATED_SETTING_SOURCES,
         ]
-        if (cwd / PROJECT_MCP_FILE).is_file():
-            command += ["--mcp-config", str(cwd / PROJECT_MCP_FILE)]
-        for plugin in _toolkit_plugins(settings, project):
-            command += ["--plugin-dir", str(plugin_dir(settings, plugin))]
+        if not bare:
+            command += ["--append-system-prompt-file", str(rules_file)]
+            if (cwd / PROJECT_MCP_FILE).is_file():
+                command += ["--mcp-config", str(cwd / PROJECT_MCP_FILE)]
+            for plugin in _toolkit_plugins(settings, project):
+                command += ["--plugin-dir", str(plugin_dir(settings, plugin))]
         if resume_session:
             command += ["--resume", resume_session]
         logger.info("▶ %s (%s) on %s", agent.name, model, ticket_id)

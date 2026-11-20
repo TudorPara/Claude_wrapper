@@ -8,7 +8,6 @@ A worker that already has a session only gets what changed since its last turn, 
 from cw.config import Limits, Project, repo_map_path
 from cw.git_hosts.base import PullRequestThread
 from cw.models import QuestionEntry, ReviewComment, ReviewEntry, Subtask, Ticket
-from cw.project_memory import NOTES_HEADING
 from cw.tickets import ticket_markdown, work_record
 
 PLAN_NOW = (
@@ -16,6 +15,11 @@ PLAN_NOW = (
     "the plan."
 )
 NO_PLAN = "The planner returned no plan. Reply with more detail about what you want, and it plans again."
+NO_NOTES = "This is a fix pass: leave `project_notes` empty."
+FIX_SCOPE = (
+    "Change only what the findings and comments ask. Edit `README.md` or `CLAUDE.md` only when a finding or comment "
+    "names them."
+)
 
 
 def _join(*sections: str) -> str:
@@ -96,12 +100,16 @@ def _context_pack(ticket: Ticket) -> str:
     return "## Key code locations to inspect (from the planner)\n\n" + "\n".join(lines)
 
 
-def fresh_worker_prompt(project: Project, ticket: Ticket, instruction: str, diff_stat: str) -> str:
-    """Return the first prompt of a worker session: the ticket, the files changed so far, then what to do."""
+def fresh_worker_prompt(project: Project, ticket: Ticket, instruction: str, diff_stat: str, seed: str = "") -> str:
+    """Return the first prompt of a worker session: the ticket, the files changed so far, then what to do.
+
+    A direct ticket's first prompt also carries the context seed, since no planner pointed at the code.
+    """
     return _join(
         ticket_markdown(ticket, full=False).strip(),
         _changes(diff_stat),
         instruction,
+        context_seed_section(seed),
         _context_pack(ticket),
         _checks(project, ticket),
         _off_limits(project),
@@ -148,7 +156,7 @@ def fix_checks_instruction(failures: list[tuple[str, str]]) -> str:
     return (
         "## Fix the failing checks\n\nThese passed before this ticket's changes and fail now. Fix the cause in the "
         "code this ticket changed. Do not weaken, skip or delete a check or a test to make it pass. "
-        "Decide yourself: questions are not possible here.\n\n" + outputs
+        f"Decide yourself: questions are not possible here. {NO_NOTES}\n\n" + outputs
     )
 
 
@@ -170,22 +178,26 @@ def fix_review_instruction(comments: list[ReviewComment]) -> str:
     )
     return (
         "## Address these review findings, and only these\n\n"
-        f"{findings}\n\nDecide yourself: questions are not possible here."
+        f"{findings}\n\n{FIX_SCOPE} Decide yourself: questions are not possible here. {NO_NOTES}"
     )
 
 
 def pull_request_comments_instruction(threads: list[PullRequestThread], findings: list[ReviewComment]) -> str:
     """Return the instruction to address the pull request's open comments and the review's open blocking findings."""
     comments = "\n".join(
-        f"- `{thread.path}:{thread.line}`\n  {thread.body.replace(chr(10), chr(10) + '  ')}" for thread in threads
+        f"- [thread {thread.id}] `{thread.path}:{thread.line}`\n  {thread.body.replace(chr(10), chr(10) + '  ')}"
+        for thread in threads
     )
     blocking = "\n".join(f"- `{finding.path}:{finding.line}` {finding.body}" for finding in findings)
     return _join(
         "## Address these pull request comments\n\nAddress every comment and finding below.",
         f"Comments on the pull request, from the reviewer agent and from people:\n\n{comments}" if comments else "",
         f"Blocking findings of the last review, still open:\n\n{blocking}" if blocking else "",
-        "Where a comment needs no change, say why in `summary`, one line per comment: cw posts your summary on the "
-        "pull request. Decide yourself: questions are not possible here.",
+        "Return one entry in `comment_outcomes` for every [thread ...] label: `fixed` when you changed the code for "
+        "it, `declined` with the reason when it needs no change. cw resolves fixed threads and replies with your "
+        "reason in declined ones, which stay open for a person. Also say in `summary`, one line per comment, what "
+        "you did: cw posts it on the pull request.",
+        f"{FIX_SCOPE} Decide yourself: questions are not possible here. {NO_NOTES}",
     )
 
 
@@ -196,7 +208,7 @@ def conflict_instruction(files: list[str], base_ref: str) -> str:
         f"## Resolve merge conflicts\n\nMerging `{base_ref}` into this branch stopped on conflicts in:\n\n{listed}\n\n"
         "Edit these files so both the base branch's changes and this ticket's intent survive, and remove every "
         "conflict marker. Do not run git: cw stages the files and commits the merge once no markers are left. "
-        "Decide yourself: questions are not possible here."
+        f"Decide yourself: questions are not possible here. {NO_NOTES}"
     )
 
 
@@ -224,8 +236,18 @@ def _repo_map(project: Project) -> str:
     return f"## Codebase architecture map\n\n```\n{content}\n```" if content else ""
 
 
-def planner_prompt(project: Project, ticket: Ticket, feedback: str | None, fresh: bool = True) -> str:
-    """Return the planner's task; a resumed planner already has the request and map, so it gets only what is new."""
+def planner_prompt(
+    project: Project,
+    ticket: Ticket,
+    feedback: str | None,
+    fresh: bool = True,
+    seed: str = "",
+    with_repo_map: bool = False,
+) -> str:
+    """Return the planner's task; a resumed planner already has the request and map, so it gets only what is new.
+
+    The context seed replaces the repo map; the map is sent when there is no seed, or when `with_repo_map` is set.
+    """
     limits = project.profile.limits
     questions_left = limits.max_question_rounds - ticket.question_rounds
     asking = (
@@ -259,7 +281,8 @@ def planner_prompt(project: Project, ticket: Ticket, feedback: str | None, fresh
     feedback_section = f"## User's answer or feedback on your last plan\n\n{feedback}" if feedback else ""
     return _join(
         _request(ticket),
-        _repo_map(project),
+        context_seed_section(seed),
+        _repo_map(project) if with_repo_map or not seed else "",
         new_project,
         feedback_section,
         f"## Constraints\n\n- {asking}\n"
@@ -305,23 +328,17 @@ def reviewer_prompt(
         )
         earlier = (
             "## Blocking findings still open from earlier reviews\n\n"
-            f"{findings}\n\nPut the id of each one the code now fixes in `resolved`. Do not repeat these as new "
-            "comments: one that is not fixed stays open by itself."
+            f"{findings}\n\nPut the id of each one the code now fixes in `resolved`. Before you do, open the code "
+            "the finding names and check the fix there, not only in the diff. When the fix is a test, check that "
+            "the test would fail without the fix. Do not repeat these as new comments: one that is not fixed "
+            "stays open by itself."
         )
-    memory = (
-        f"## cw's project notes\n\nThe section `{NOTES_HEADING}` in CLAUDE.md is written by cw from the workers' "
-        "`project_notes` and ships with every change on purpose. It is not outside the task: flag a note only if "
-        "it is wrong or not a lasting fact."
-        if NOTES_HEADING in diff
-        else ""
-    )
     return _join(
         _request(ticket),
         _plan(ticket),
         worker_notes,
         _check_results(project, ticket),
         earlier,
-        memory,
         f"## Diff to review{note}\n\n```diff\n{diff}\n```",
     )
 
@@ -350,4 +367,23 @@ def pull_request_body(ticket: Ticket, final_reviews: list[ReviewEntry]) -> str:
         f"## Changes\n\n{work}",
         f"## Agent review\n\n{reviews}" if reviews else "",
         f"Ticket `{ticket.id}` · generated with cw",
+    )
+
+
+def hyde_prompt(request: str, stack: str, layout: str) -> str:
+    """Return the context sketcher's task: the request, the stack and the folder names, nothing else."""
+    return _join(
+        f"## Request\n\n{request}", f"## Stack\n\n{stack or 'unknown'}", f"## Folders\n\n{layout}" if layout else ""
+    )
+
+
+def context_seed_section(seed: str) -> str:
+    """Return the seed as the prompt section that gives it to the planner or a direct ticket's worker."""
+    if not seed:
+        return ""
+    return (
+        "## Code likely relevant to this request\n\n"
+        "cw ranked these by keyword, dependency, embedding and past-ticket signals. They are a starting point, not a "
+        "verdict: open what you need, skip what does not fit, and search further only where the plan needs it.\n\n"
+        f"```\n{seed}\n```"
     )

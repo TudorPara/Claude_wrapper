@@ -9,7 +9,7 @@ import urllib.request
 
 from cw.config import BitbucketCredentials
 from cw.errors import AppErrorCode, AppException
-from cw.git_hosts.base import PullRequest, PullRequestThread
+from cw.git_hosts.base import PullRequest, PullRequestThread, finding_text
 from cw.models import ReviewComment
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ class BitbucketHost:
         self._request("POST", f"/pullrequests/{number}/comments", {"content": {"raw": summary}})
         for comment in comments:
             payload = {
-                "content": {"raw": f"**{comment.severity}** {comment.body}"},
+                "content": {"raw": finding_text(comment)},
                 "inline": {"path": comment.path, "to": comment.line},
             }
             self._request("POST", f"/pullrequests/{number}/comments", payload)
@@ -101,13 +101,19 @@ class BitbucketHost:
             if thread:
                 author = comment.get("user", {}).get("display_name", "someone")
                 thread.body = "\n".join(filter(None, [thread.body, f"{author}: {comment['content']['raw']}"]))
+                thread.last_comment = comment["content"]["raw"]
         return list(threads.values())
 
     def resolve_thread(self, number: int, thread_id: str) -> None:
         """Resolve an inline comment and its replies."""
         self._request("POST", f"/pullrequests/{number}/comments/{thread_id}/resolve")
 
-    def merge(self, number: int, branch: str, message: str, sha: str) -> None:
+    def reply_to_thread(self, number: int, thread_id: str, body: str) -> None:
+        """Reply to an inline comment without resolving it."""
+        payload = {"content": {"raw": body}, "parent": {"id": int(thread_id)}}
+        self._request("POST", f"/pullrequests/{number}/comments", payload)
+
+    def merge(self, number: int, branch: str, message: str, sha: str) -> str:
         """Squash-merge the pull request and close its source branch, refusing when its head is no longer `sha`.
 
         Bitbucket's merge call takes no expected head, so the head is compared just before it.
@@ -118,4 +124,5 @@ class BitbucketHost:
                 AppErrorCode.GIT_HOST_FAILED, f"Pull request {number} is at {head}, not at the checked {sha}."
             )
         payload = {"merge_strategy": SQUASH_STRATEGY, "close_source_branch": True, "message": message}
-        self._request("POST", f"/pullrequests/{number}/merge", payload)
+        merged = self._request("POST", f"/pullrequests/{number}/merge", payload)
+        return (merged.get("merge_commit") or {}).get("hash", "")
