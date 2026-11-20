@@ -7,7 +7,7 @@
     "route": "planned",
     "branch": "cw/261117-categories-k1l2",
     "pr_url": null,
-    "updated_at": "2026-11-18T08:43:29.926286Z",
+    "updated_at": "2026-11-20T06:06:14.114870Z",
     "running": false,
     "archived": true,
     "error": null
@@ -20,7 +20,7 @@
     "route": "planned",
     "branch": "cw/261118-cookie-auth-i9j0",
     "pr_url": null,
-    "updated_at": "2026-11-18T08:43:29.925818Z",
+    "updated_at": "2026-11-20T06:06:14.114421Z",
     "running": false,
     "archived": false,
     "error": "Task S1: `uv run pytest` still fails after the fix round."
@@ -33,7 +33,7 @@
     "route": "planned",
     "branch": "cw/261118-currency-g7h8",
     "pr_url": null,
-    "updated_at": "2026-11-18T08:43:29.925378Z",
+    "updated_at": "2026-11-20T06:06:14.113975Z",
     "running": false,
     "archived": false,
     "error": null
@@ -46,7 +46,7 @@
     "route": "planned",
     "branch": "cw/261118-budget-alerts-e5f6",
     "pr_url": null,
-    "updated_at": "2026-11-18T08:43:29.924920Z",
+    "updated_at": "2026-11-20T06:06:14.113509Z",
     "running": false,
     "archived": false,
     "error": null
@@ -59,7 +59,7 @@
     "route": "planned",
     "branch": "cw/261118-monthly-report-c3d4",
     "pr_url": "https://github.com/example/expense-tracker/pull/4",
-    "updated_at": "2026-11-18T08:43:29.924385Z",
+    "updated_at": "2026-11-20T06:06:14.112991Z",
     "running": false,
     "archived": false,
     "error": null
@@ -72,7 +72,7 @@
     "route": "planned",
     "branch": "cw/261118-csv-import-a1b2",
     "pr_url": null,
-    "updated_at": "2026-11-18T08:43:29.921858Z",
+    "updated_at": "2026-11-20T06:06:14.110405Z",
     "running": false,
     "archived": false,
     "error": null

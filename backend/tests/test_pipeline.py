@@ -10,6 +10,8 @@ from cw.config import AgentRole, get_settings, write_settings
 from cw.errors import AppErrorCode, AppException
 from cw.git_hosts.base import PullRequestThread
 from cw.models import (
+    CommentOutcome,
+    CommentOutcomeKind,
     PlannerResult,
     ReviewComment,
     ReviewerResult,
@@ -562,7 +564,7 @@ def test_older_tasks_keep_their_handoff_but_lose_their_summary_in_the_workers_vi
     assert "- Solved by W2: pass 2" in third
 
 
-def test_a_workers_project_notes_land_in_the_projects_claude_md_and_in_the_diff(
+def test_a_workers_project_notes_stay_with_the_ticket_and_never_touch_claude_md(
     local_repository: Path, agents: FakeAgents
 ) -> None:
     def notes(prompt: str, cwd: Path, call: int) -> WorkerResult:
@@ -571,19 +573,9 @@ def test_a_workers_project_notes_land_in_the_projects_claude_md_and_in_the_diff(
 
     agents.worker = notes
     ticket = pipeline.start_ticket("demo", "add app", plan_first=False)
-    assert "- The entry point is app.py." in (local_repository / "CLAUDE.md").read_text()
+    assert not (local_repository / "CLAUDE.md").exists()
+    assert ticket.work_log[0].project_notes == ["The entry point is app.py."]
     assert ticket.work_log[0].files == ["app.py"]
-    assert "CLAUDE.md" in git(local_repository, "status", "--porcelain")
-    pipeline.review(ticket.id)
-    assert "## cw's project notes" in agents.prompts_for(AgentRole.REVIEWER)[0]
-
-
-def test_the_reviewer_hears_about_cw_notes_only_when_the_diff_has_them(
-    local_repository: Path, agents: FakeAgents
-) -> None:
-    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
-    pipeline.review(ticket.id)
-    assert "## cw's project notes" not in agents.prompts_for(AgentRole.REVIEWER)[0]
 
 
 def test_fix_sends_the_open_pr_comments_to_the_worker_pushes_the_fix_and_resolves_them(
@@ -597,7 +589,7 @@ def test_fix_sends_the_open_pr_comments_to_the_worker_pushes_the_fix_and_resolve
     fixed = pipeline.fix_pull_request(ticket.id)
     prompt = agents.prompts_for(WORKER)[1]
     assert prompt.startswith("## Address these pull request comments")
-    assert "- `work_1.txt:1`\n  reviewer: be stricter\n  alice: and rename it" in prompt
+    assert "- [thread T1] `work_1.txt:1`\n  reviewer: be stricter\n  alice: and rename it" in prompt
     assert fixed.status == TicketStatus.PR_OPEN and host.resolved == ["T1"]
     assert host.summaries[-1] == "**W1** · 1 comment(s)\n\npass 2"
     assert git(remote_repository, "rev-list", "--count", f"main..{ticket.branch}") == "2"
@@ -619,7 +611,7 @@ def test_fix_posts_each_new_review_as_a_comment_and_stops_when_no_blocking_findi
     fixed = pipeline.fix_pull_request(ticket.id)
     assert len(_pull_request_fix_prompts(agents)) == 1 and host.resolved == ["T1"]
     assert [thread.id for thread in host.threads] == ["T1"]
-    assert "- `work_1.txt:1` (minor) rename it" in host.summaries[-2]
+    assert "- `work_1.txt:1` **minor** [F1] rename it" in host.summaries[-2]
     assert fixed.open_findings == []
 
 
@@ -676,7 +668,7 @@ def test_fix_without_open_comments_runs_no_agent(remote_repository: Path, agents
     assert len(agents.prompts) == runs and host.resolved == []
 
 
-def test_merge_refuses_until_ci_passed_and_no_blocking_finding_is_left(
+def test_merge_refuses_until_no_blocking_finding_or_unresolved_thread_is_left_and_ci_passed(
     remote_repository: Path, agents: FakeAgents, host: FakeHost
 ) -> None:
     finding = ReviewComment(path="work_1.txt", line=1, severity=Severity.BLOCKING, body="wrong")
@@ -689,6 +681,10 @@ def test_merge_refuses_until_ci_passed_and_no_blocking_finding_is_left(
     stored = find_ticket(ticket.id)
     stored.open_findings = []
     write_ticket(stored)
+    with pytest.raises(AppException, match=r"unresolved pull request thread\(s\) \(not addressed: work_1.txt:1"):
+        pipeline.merge_pull_request(ticket.id)
+
+    host.resolved = [thread.id for thread in host.threads]
     host.ci = False
     with pytest.raises(AppException, match="CI has not passed"):
         pipeline.merge_pull_request(ticket.id)
@@ -718,12 +714,13 @@ def test_merge_squash_merges_on_the_host_closes_the_ticket_and_deletes_the_local
     ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
     pipeline.open_pull_request(ticket.id)
 
-    def squash_on_the_host(number: int, branch: str, message: str, sha: str) -> None:
+    def squash_on_the_host(number: int, branch: str, message: str, sha: str) -> str:
         host.merged.append((number, branch, message, sha))
         git(workspace, "clone", str(workspace / "origin.git"), "host")
         git(workspace / "host", "merge", "--squash", f"origin/{branch}")
-        git(workspace / "host", "commit", "-m", message)
+        git(workspace / "host", "commit", "-m", f"{message} (#{number})")
         git(workspace / "host", "push", "origin", "main")
+        return git(workspace / "host", "rev-parse", "HEAD")
 
     host.merge = squash_on_the_host
     pushed = git(remote_repository, "rev-parse", ticket.branch)
@@ -734,6 +731,8 @@ def test_merge_squash_merges_on_the_host_closes_the_ticket_and_deletes_the_local
     assert ticket.branch not in git(remote_repository, "branch", "--list")
     assert git(remote_repository, "rev-parse", "main") == git(workspace / "origin.git", "rev-parse", "main")
     assert (remote_repository / "work_1.txt").exists()
+    assert merged.merge_commit == git(workspace / "origin.git", "rev-parse", "main")
+    assert merged.changed_files == ["work_1.txt"]
 
 
 def test_a_conflict_resolution_is_checked_and_reviewed_before_it_is_pushed(
@@ -845,7 +844,7 @@ def test_split_creates_paused_tickets_without_running_agents_and_abandons_the_or
     assert planned.status == TicketStatus.AWAITING_APPROVAL
 
 
-def test_a_ticket_adds_at_most_five_notes_to_claude_md(local_repository: Path, agents: FakeAgents) -> None:
+def test_a_ticket_keeps_at_most_five_notes(local_repository: Path, agents: FakeAgents) -> None:
     def three_notes(prompt: str, cwd: Path, call: int) -> WorkerResult:
         (cwd / f"app_{call}.py").write_text("x = 1\n")
         notes = [f"Note {call}.{number}." for number in range(3)]
@@ -853,9 +852,10 @@ def test_a_ticket_adds_at_most_five_notes_to_claude_md(local_repository: Path, a
 
     agents.worker = three_notes
     ticket = pipeline.start_ticket("demo", "two steps", plan_first=True)
-    pipeline.approve(ticket.id)
-    written = (local_repository / "CLAUDE.md").read_text()
-    assert written.count("- Note ") == 5 and "Note 2.1." in written and "Note 2.2." not in written
+    approved = pipeline.approve(ticket.id)
+    kept = [note for entry in approved.work_log for note in entry.project_notes]
+    assert len(kept) == 5 and "Note 2.1." in kept and "Note 2.2." not in kept
+    assert not (local_repository / "CLAUDE.md").exists()
 
 
 def test_worker_runs_are_labelled_with_worker_and_task_and_each_check_is_an_event(
@@ -866,3 +866,180 @@ def test_worker_runs_are_labelled_with_worker_and_task_and_each_check_is_an_even
     assert agents.labels == ["planner", "W1 · S1", "W1 · S2"]
     events = [json.loads(line) for line in events_path("demo", ticket.id).read_text().splitlines()]
     assert {event["kind"] for event in events} == {"check"} and all(event["passed"] for event in events)
+
+
+def _set_limit(name: str, value: int) -> None:
+    config_file = Path(os.environ["CW_HOME"]) / "config.json"
+    config = json.loads(config_file.read_text())
+    for project in config["projects"]:
+        project["profile"]["limits"][name] = value
+    config_file.write_text(json.dumps(config))
+    get_settings.cache_clear()
+
+
+def _reviewer_calls(agents: FakeAgents) -> int:
+    return len(agents.prompts_for(AgentRole.REVIEWER))
+
+
+def _comment_worker(outcome: CommentOutcomeKind | None, lines: int = 1, reason: str = ""):
+    def work(prompt: str, cwd: Path, call: int) -> WorkerResult:
+        if "## Address these pull request comments" not in prompt:
+            return FakeAgents().default_worker(prompt, cwd, call)
+        if lines:
+            (cwd / f"fix_{call}.txt").write_text("".join(f"line {number}\n" for number in range(lines)))
+        outcomes = [CommentOutcome(thread_id="T1", outcome=outcome, reason=reason)] if outcome else []
+        return answer(WorkerStatus.DONE, "handled", comment_outcomes=outcomes)
+
+    return work
+
+
+def _open_pr_with_comment(agents: FakeAgents, host: FakeHost, body: str = "alice: rename it") -> str:
+    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
+    pipeline.open_pull_request(ticket.id)
+    host.threads = [PullRequestThread(id="T1", path="work_1.txt", line=1, body=body, last_comment=body)]
+    return ticket.id
+
+
+def test_a_declined_comment_gets_a_reply_stays_open_and_is_not_sent_again_until_a_person_answers(
+    remote_repository: Path, agents: FakeAgents, host: FakeHost
+) -> None:
+    ticket_id = _open_pr_with_comment(agents, host)
+    agents.worker = _comment_worker(CommentOutcomeKind.DECLINED, lines=0, reason="the name follows the module")
+    pipeline.fix_pull_request(ticket_id)
+    assert host.replies == [("T1", f"{pipeline.DECLINE_REPLY_PREFIX} the name follows the module")]
+    assert host.resolved == []
+
+    sent = len(_pull_request_fix_prompts(agents))
+    pipeline.fix_pull_request(ticket_id)
+    assert len(_pull_request_fix_prompts(agents)) == sent
+    with pytest.raises(AppException, match="declined by the worker, for you to decide: work_1.txt:1"):
+        pipeline.merge_pull_request(ticket_id)
+
+    host.threads[0].last_comment = "alice: please rename it anyway"
+    pipeline.fix_pull_request(ticket_id)
+    assert len(_pull_request_fix_prompts(agents)) == sent + 1
+
+
+def test_a_declined_thread_carrying_a_blocking_finding_is_not_sent_again_as_a_finding(
+    remote_repository: Path, agents: FakeAgents, host: FakeHost
+) -> None:
+    ticket_id = _open_pr_with_comment(agents, host, body="me: **blocking** [F9] must validate")
+    stored = find_ticket(ticket_id)
+    stored.open_findings = [ReviewComment(id="F9", path="work_1.txt", line=1, severity=Severity.BLOCKING, body="x")]
+    write_ticket(stored)
+    agents.worker = _comment_worker(CommentOutcomeKind.DECLINED, lines=0, reason="validated upstream")
+    pipeline.fix_pull_request(ticket_id)
+    sent = len(_pull_request_fix_prompts(agents))
+    pipeline.fix_pull_request(ticket_id)
+    assert len(_pull_request_fix_prompts(agents)) == sent
+
+
+def test_a_fixed_comment_is_resolved_and_a_comment_without_an_outcome_stays_open(
+    remote_repository: Path, agents: FakeAgents, host: FakeHost
+) -> None:
+    ticket_id = _open_pr_with_comment(agents, host)
+    agents.worker = _comment_worker(None)
+    pipeline.fix_pull_request(ticket_id)
+    assert host.resolved == [] and host.replies == []
+
+    agents.worker = _comment_worker(CommentOutcomeKind.FIXED)
+    pipeline.fix_pull_request(ticket_id)
+    assert host.resolved == ["T1"]
+
+
+def test_a_fix_round_reviews_once_and_leaves_new_blocking_findings_to_the_next_round(
+    remote_repository: Path, agents: FakeAgents, host: FakeHost
+) -> None:
+    ticket_id = _open_pr_with_comment(agents, host)
+    reviews_before = _reviewer_calls(agents)
+    finding = ReviewComment(path="work_1.txt", line=1, severity=Severity.BLOCKING, body="still wrong")
+    agents.reviewer = lambda prompt: ReviewerResult(summary="no", comments=[finding])
+    fixed = pipeline.fix_pull_request(ticket_id)
+    rounds = len(_pull_request_fix_prompts(agents))
+    assert rounds == get_settings().project("demo").profile.limits.max_pull_request_fix_rounds
+    assert _reviewer_calls(agents) - reviews_before == rounds
+    assert fixed.open_findings
+
+
+def test_every_review_after_the_first_runs_on_the_follow_up_model(local_repository: Path, agents: FakeAgents) -> None:
+    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
+    pipeline.review(ticket.id)
+    pipeline.follow_up(ticket.id, "one more file")
+    pipeline.review(ticket.id)
+    reviewer_models = [
+        model for (role, _), model in zip(agents.prompts, agents.models, strict=True) if role == AgentRole.REVIEWER
+    ]
+    assert reviewer_models == [None, get_settings().project("demo").profile.models.reviewer_followup]
+    assert get_settings().project("demo").profile.models.reviewer_followup == "sonnet"
+
+
+def test_a_small_comment_only_fix_skips_the_review(remote_repository: Path, agents: FakeAgents, host: FakeHost) -> None:
+    _set_limit("review_skip_max_changed_lines", 20)
+    ticket_id = _open_pr_with_comment(agents, host)
+    reviews_before = _reviewer_calls(agents)
+    agents.worker = _comment_worker(CommentOutcomeKind.FIXED, lines=2)
+    pipeline.fix_pull_request(ticket_id)
+    assert _reviewer_calls(agents) == reviews_before
+    assert "Review skipped: the round changed 2 line(s) (limit 20)" in host.summaries[-1]
+
+
+@pytest.mark.parametrize(
+    ("limit", "lines", "broken"),
+    [(20, 30, False), (0, 2, False), (20, 2, True)],
+    ids=["too-many-lines", "skip-disabled", "failing-checks"],
+)
+def test_a_comment_fix_is_reviewed_when_it_is_big_skipping_is_off_or_the_checks_fail(
+    remote_repository: Path, agents: FakeAgents, host: FakeHost, limit: int, lines: int, broken: bool
+) -> None:
+    _set_limit("review_skip_max_changed_lines", limit)
+    ticket_id = _open_pr_with_comment(agents, host)
+    reviews_before = _reviewer_calls(agents)
+    fixing = _comment_worker(CommentOutcomeKind.FIXED, lines=lines)
+
+    def maybe_breaking(prompt: str, cwd: Path, call: int) -> WorkerResult:
+        if broken:
+            (cwd / "BROKEN").write_text("x")
+        return fixing(prompt, cwd, call)
+
+    agents.worker = maybe_breaking
+    pipeline.fix_pull_request(ticket_id)
+    assert _reviewer_calls(agents) > reviews_before
+
+
+def test_a_fix_of_a_blocking_finding_posted_as_a_thread_is_always_reviewed(
+    remote_repository: Path, agents: FakeAgents, host: FakeHost
+) -> None:
+    _set_limit("review_skip_max_changed_lines", 20)
+    ticket_id = _open_pr_with_comment(agents, host, body="me: **blocking** [F9] the text GitHub reformatted")
+    stored = find_ticket(ticket_id)
+    stored.open_findings = [
+        ReviewComment(id="F9", path="work_1.txt", line=1, severity=Severity.BLOCKING, body="the original text")
+    ]
+    write_ticket(stored)
+    reviews_before = _reviewer_calls(agents)
+    agents.worker = _comment_worker(CommentOutcomeKind.FIXED, lines=2)
+    pipeline.fix_pull_request(ticket_id)
+    assert _reviewer_calls(agents) > reviews_before
+    assert "Blocking findings of the last review" not in _pull_request_fix_prompts(agents)[0]
+
+
+def test_a_fix_pass_keeps_no_notes_and_flags_an_unasked_readme_edit_but_not_a_test(
+    local_repository: Path, agents: FakeAgents
+) -> None:
+    finding = ReviewComment(path="work_1.txt", line=1, severity=Severity.BLOCKING, body="wrong")
+    agents.reviewer = lambda prompt: ReviewerResult(summary="no", comments=[] if "still open" in prompt else [finding])
+
+    def fixing(prompt: str, cwd: Path, call: int) -> WorkerResult:
+        if not prompt.startswith("## Address these review findings"):
+            return agents.default_worker(prompt, cwd, call)
+        (cwd / "README.md").write_text("rewritten\n")
+        (cwd / "test_extra.py").write_text("def test_extra():\n    assert True\n")
+        return answer(WorkerStatus.DONE, "fixed", project_notes=["a lasting fact"])
+
+    agents.worker = fixing
+    ticket = pipeline.start_ticket("demo", "add a file", plan_first=False)
+    reviewed = pipeline.review(ticket.id)
+    assert not (local_repository / "CLAUDE.md").exists()
+    scope = [warning for warning in reviewed.warnings if warning.startswith("Scope: fix:")]
+    assert scope and "README.md" in scope[0] and "test_extra.py" not in scope[0]
+    assert "leave `project_notes` empty" in agents.prompts_for(WORKER)[-1]

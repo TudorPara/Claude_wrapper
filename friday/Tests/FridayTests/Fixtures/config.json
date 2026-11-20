@@ -57,12 +57,16 @@
       "planner": "opus",
       "worker": "sonnet",
       "reviewer": "opus",
-      "onboarder": "sonnet"
+      "onboarder": "sonnet",
+      "reviewer_followup": "sonnet",
+      "context": "haiku"
     },
     "limits": {
-      "max_review_rounds": 1,
-      "max_fix_rounds": 1,
+      "max_review_rounds": 2,
+      "max_fix_rounds": 2,
+      "max_backoff_rounds": 1,
       "max_conflict_rounds": 1,
+      "review_skip_max_changed_lines": 20,
       "max_pull_request_fix_rounds": 3,
       "max_question_rounds": 1,
       "max_workers": 4,
@@ -73,10 +77,11 @@
       "agent_timeout_minutes": 45,
       "check_timeout_minutes": 15,
       "max_turns": {
-        "planner": 60,
+        "planner": 40,
         "worker": 70,
         "reviewer": 30,
-        "onboarder": 60
+        "onboarder": 60,
+        "context": 1
       }
     },
     "worker_permission_mode": "acceptEdits",
@@ -108,12 +113,16 @@
           "planner": "opus",
           "worker": "sonnet",
           "reviewer": "opus",
-          "onboarder": "sonnet"
+          "onboarder": "sonnet",
+          "reviewer_followup": "sonnet",
+          "context": "haiku"
         },
         "limits": {
-          "max_review_rounds": 1,
-          "max_fix_rounds": 1,
+          "max_review_rounds": 2,
+          "max_fix_rounds": 2,
+          "max_backoff_rounds": 1,
           "max_conflict_rounds": 1,
+          "review_skip_max_changed_lines": 20,
           "max_pull_request_fix_rounds": 3,
           "max_question_rounds": 1,
           "max_workers": 4,
@@ -124,10 +133,11 @@
           "agent_timeout_minutes": 45,
           "check_timeout_minutes": 15,
           "max_turns": {
-            "planner": 60,
+            "planner": 40,
             "worker": 70,
             "reviewer": 30,
-            "onboarder": 60
+            "onboarder": 60,
+            "context": 1
           }
         },
         "worker_permission_mode": "acceptEdits",
@@ -137,5 +147,51 @@
       },
       "compose_file": ""
     }
-  ]
+  ],
+  "context": {
+    "include_repo_map": false,
+    "seed_max_tokens": 2500,
+    "seed_ticket_tokens": 500,
+    "max_seed_files": 15,
+    "max_symbols_per_file": 6,
+    "layout_max_folders": 60,
+    "lexical_top_k": 60,
+    "max_query_terms": 60,
+    "fusion_k": 60,
+    "graph_weight": 1.0,
+    "history_weight": 1.0,
+    "pagerank_damping": 0.85,
+    "pagerank_iterations": 30,
+    "import_edge_weight": 2.0,
+    "reverse_edge_weight": 0.5,
+    "max_file_bytes": 400000,
+    "max_chunk_chars": 6000,
+    "max_similar_tickets": 3,
+    "record_plan_chars": 1200,
+    "hyde_max_chars": 2000,
+    "eval_k_values": [
+      5,
+      10,
+      20
+    ],
+    "eval_max_truth_files": 20,
+    "embeddings": {
+      "provider": "ollama",
+      "base_url": "http://localhost:11434",
+      "model": "qwen3-embedding:8b-q8_0",
+      "query_template": "Instruct: {instruction}\nQuery:{query}",
+      "query_instruction": "Given a request to change a code repository, retrieve the code that must be read or changed to do it",
+      "dimensions": 1024,
+      "context_length": 8192,
+      "batch_size": 32,
+      "request_timeout_seconds": 300,
+      "keep_alive": "10m",
+      "dense_top_k": 60,
+      "max_incremental_files": 20
+    }
+  },
+  "storage": {
+    "max_index_mb": 1024,
+    "event_retention_days": 30
+  }
 }

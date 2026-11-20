@@ -79,11 +79,12 @@ Every loop has a limit in the config, so a ticket can't run away in time or cost
 **Cost**
 - **Isolation.** cw's agents ignore each developer's personal plugins and MCP servers. A run that only says "hi" went from 36.9k tokens of context to 5.9k.
 - **Small, targeted context.** Workers went from 35–80k tokens per turn to about 8–12k, and the planner from about 19k to 4.4k.
-  - The planner reads a map of the repository, not the code.
+  - The planner starts from a seed made for the request (the context engine): the files and definitions most likely to matter, found by keywords, paths, past tickets, local embeddings and a HyDE sketch, ranked with the code's dependency graph. It replaces the repository map, so the first prompt does not grow.
   - The planner hands workers 5–15 `file:lines` pointers to start from.
   - Rules arrive only when relevant: the core rules, the style rules and ponytail always (about 390 lines, cached), and a topic only when an agent touches a matching file.
 - **The team's own conventions.** The Python rules are the Nexttech internship conventions (`nexttech-claude-kit`), copied without the reviewers' names, so agents write code the team's reviewers expect.
 - **Prompt caching.** A worker keeps one session across related tasks, so repeated context is read from cache at about a tenth of the price.
+- **Cheaper reviews.** `cw fix` reviews once per round, re-reviews run on Sonnet, and a small comment-only fix skips its review. Reviews were 47% of the cost of the 2026-11-19 test.
 - **No router agent and no parallel agents.** A first version used 1 planner, 17 workers and 2 reviewers for "two small features"; now the same work is 2 tickets with about 1 worker and 1 reviewer each, and 1 commit instead of 14.
 
 **Quality**
@@ -94,6 +95,7 @@ Every loop has a limit in the config, so a ticket can't run away in time or cost
   - Failures that already exist on `main` aren't blamed on the ticket.
   - A task that touches files outside its plan gets a warning.
 - **A strict reviewer on every change** names the team rule behind each finding. The worker fixes every finding, minor ones included, before the PR opens.
+- **Every PR comment is answered.** The worker marks each one fixed or declined; declined ones get a reply and stay open, and `cw merge` waits until no thread is unresolved.
 - **Agents can't commit, push, merge or switch branches.** A guard hook and a command allow-list enforce it; cw does all git work once, at the end.
 - **Warnings, not hard blocks, where the planner might be wrong.** A guess about which files a task needs shouldn't stop a correct change.
 
@@ -133,6 +135,11 @@ Each run surfaced bugs in cw. Most are fixed; three are documented, each with a 
 - GitHub is tested end to end; Bitbucket is written but has never run against a real server.
 - One open ticket per project at a time.
 - The toolkit is not published to a shared repository yet.
+- The context engine's dependency graph covers Python only; ticket records live on the machine that ran the ticket.
+
+## The context engine, in one paragraph
+
+A per-project index in `~/.cw` (SQLite, keyed by git blob, so unchanged files are never read twice) holds the code's chunks, their embeddings from a local Ollama (`qwen3-embedding:8b-q8_0`), and a record of every finished ticket. At ticket start cw searches it six ways, fuses the rankings, and hands the planner (or a direct ticket's worker) a short seed in place of the repository map. It never stops a ticket, never sends code off the machine, and `cw gc` keeps it bounded. `cw context eval` and `BENCHMARK.md` measure what it is worth. Details: `EXPLANATION.md` §19.
 
 ## More detail
 

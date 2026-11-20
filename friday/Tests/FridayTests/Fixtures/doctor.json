@@ -38,5 +38,25 @@
     "check": "plugin pyright-lsp@claude-plugins-official",
     "status": "ok",
     "hint": "claude plugin marketplace add anthropics/claude-plugins-official && claude plugin install pyright-lsp@claude-plugins-official"
+  },
+  {
+    "check": "sqlite fts5",
+    "status": "ok",
+    "hint": ""
+  },
+  {
+    "check": "ollama qwen3-embedding:8b-q8_0",
+    "status": "ok",
+    "hint": ""
+  },
+  {
+    "check": "cw data 0.1 MB",
+    "status": "ok",
+    "hint": ""
+  },
+  {
+    "check": "context index expense-tracker (0.0 MB)",
+    "status": "missing",
+    "hint": "cw context build expense-tracker"
   }
 ]

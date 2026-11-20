@@ -2,12 +2,14 @@
 
 import json
 import shutil
+import sqlite3
 import subprocess
 from collections import defaultdict
 
-from cw import git
-from cw.config import GitHostProvider, Settings, conventions_path
-from cw.models import TicketStatus
+from cw import context_index, embeddings, git, storage
+from cw.config import GitHostProvider, Settings, context_db_path, conventions_path, cw_home
+from cw.errors import AppException
+from cw.models import RunUsage, TicketStatus
 from cw.tickets import list_tickets, read_ticket, ticket_paths
 from cw.toolkit import list_agents, list_skills, toolkit_version
 
@@ -22,6 +24,17 @@ WAITING_STATUSES = {
 }
 
 
+def run_costs(runs: list[RunUsage]) -> list[tuple[RunUsage, float]]:
+    """Return each run with its own cost; a resumed session reports a running total, so earlier runs are subtracted."""
+    session_spent: dict[str, float] = {}
+    costs = []
+    for run in runs:
+        costs.append((run, run.cost_usd - session_spent.get(run.session_id, 0.0)))
+        if run.session_id:
+            session_spent[run.session_id] = run.cost_usd
+    return costs
+
+
 def usage_stats(settings: Settings) -> list[dict]:
     """Return token usage summed per project and agent role, across all tickets."""
     totals: dict[tuple[str, str], dict] = defaultdict(
@@ -29,12 +42,9 @@ def usage_stats(settings: Settings) -> list[dict]:
     )
     for path in ticket_paths():
         ticket = read_ticket(path)
-        session_spent: dict[str, float] = {}
-        for run in ticket.runs:
+        for run, cost in run_costs(ticket.runs):
             total = totals[(ticket.project, run.role)]
-            total["cost_usd"] += run.cost_usd - session_spent.get(run.session_id, 0.0)
-            if run.session_id:
-                session_spent[run.session_id] = run.cost_usd
+            total["cost_usd"] += cost
             total["runs"] += 1
             total["input_tokens"] += run.input_tokens + run.cache_creation_tokens
             total["output_tokens"] += run.output_tokens
@@ -127,4 +137,40 @@ def build_doctor_report(settings: Settings) -> list[tuple[str, str, str]]:
         repository = settings.external_marketplaces.get(marketplace, marketplace)
         hint = f"claude plugin marketplace add {repository} && claude plugin install {plugin}"
         rows.append((f"plugin {plugin}", OK if plugin in installed else MISSING, hint))
+    return rows + _context_rows(settings)
+
+
+def _context_rows(settings: Settings) -> list[tuple[str, str, str]]:
+    """Return the context engine's checks: FTS5, Ollama and its model, each project's index and its size."""
+    rows = []
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.execute(context_index.FTS5_PROBE)
+        rows.append(("sqlite fts5", OK, ""))
+    except sqlite3.OperationalError:
+        rows.append(("sqlite fts5", MISSING, "use a Python whose SQLite has FTS5 (uv's Python does)"))
+    finally:
+        connection.close()
+    embedding = settings.context.embeddings
+    try:
+        embeddings.check_embeddings(settings)
+        rows.append((f"ollama {embedding.model}", OK, ""))
+    except AppException as error:
+        rows.append((f"ollama {embedding.model}", MISSING, error.detail))
+    total = storage.folder_size(cw_home())
+    rows.append((f"cw data {total / storage.BYTES_PER_MB:.1f} MB", OK, ""))
+    for size in storage.storage_report(settings):
+        project = settings.project(size["project"])
+        index = context_db_path(project.name)
+        current = ""
+        if index.exists():
+            with context_index.opened_index(project.name) as opened:
+                current = context_index.meta_value(opened, context_index.META_COMMIT)
+        base = git.resolve_commit(project.path, project.base_branch) if project.path.exists() else ""
+        state = OK if index.exists() and current == base else MISSING
+        hint = f"cw context build {project.name}" if not index.exists() else "updated at the next ticket start"
+        mb = size["index_bytes"] / storage.BYTES_PER_MB
+        rows.append((f"context index {project.name} ({mb:.1f} MB)", state, hint))
+        if size["over_limit"]:
+            rows.append((f"context index {project.name} size", MISSING, f"cw gc {project.name}"))
     return rows

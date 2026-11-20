@@ -183,7 +183,7 @@ cw stats
 | `cw init --toolkit <path> --github-repo <owner/name> [--force]` | Write a starter config |
 | `cw config [show] [--json]` | Print the config |
 | `cw config set < config.json` | Replace the config with JSON from stdin |
-| `cw doctor [--json]` | Check binaries, tokens, toolkit and plugins |
+| `cw doctor [--json]` | Check binaries, tokens, toolkit, plugins, SQLite FTS5, Ollama and each project's context index |
 | `cw toolkit [--json]` | Agents, skills and models |
 
 **Projects**
@@ -192,7 +192,7 @@ cw stats
 |---|---|
 | `cw project add <path> [--name <name>] [--host github\|bitbucket] [--onboard]` | Register a repository |
 | `cw project onboard <project>` | Map it with the onboarder agent |
-| `cw project remove <project>` | Unregister it |
+| `cw project remove <project> [--purge] [--yes]` | Unregister it and delete its caches (index, repo map); `--purge` also deletes its decisions and tickets |
 | `cw project list` | Each project's codebase state, as JSON |
 | `cw project wire <project>` | Write the toolkit into the repo's .claude/settings.json |
 | `cw project map <project> [--json]` | Generate or print the repo map |
@@ -210,8 +210,8 @@ cw stats
 | `cw review <ticket>` | Checks and reviewer; nothing is committed |
 | `cw pr <ticket>` | Review, commit once, push, open the pull request |
 | `cw ci <ticket>` | The pull request's CI status |
-| `cw fix <ticket>` | The worker addresses the PR's comments and open blocking findings, again while blocking findings stay open (at most 3 rounds) |
-| `cw merge <ticket>` | Squash-merge once CI passed, close the ticket |
+| `cw fix <ticket>` | The worker answers each PR comment (fixed or declined) and the open blocking findings; one review per round, skipped for a small comment-only fix; again while blocking findings stay open (at most 3 rounds) |
+| `cw merge <ticket>` | Squash-merge once CI passed and no PR thread or blocking finding is open, close the ticket |
 | `cw done <ticket> [--abandon]` | Close the ticket and switch back |
 | `cw park <ticket>` | Save the work as a WIP commit and switch back |
 
@@ -223,6 +223,24 @@ cw stats
 | `cw show <ticket> [--json]` | One ticket |
 | `cw stats [--json]` | Token usage per project and role |
 | `cw events <ticket> [--last N] [--json]` | The ticket's latest agent events: starts, tool calls, ends, failures, checks |
+
+**The context engine and its data**
+
+| Command | What it does |
+|---|---|
+| `cw context build <project> [--prune]` | Build the whole index at HEAD, embeddings included (needs Ollama) |
+| `cw context status <project> [--json]` | What the index holds, whether it is current, its size |
+| `cw context search <project> "<text>" [--no-hyde] [--json]` | The seed the planner would get |
+| `cw context eval <project> [--from-commits N] [--method <name>] [--yes] [--json]` | How often the seed finds the files changes really touched |
+| `cw context migrate-notes <project>` | Copy CLAUDE.md's old "Notes kept by cw" into the index |
+| `cw gc [<project>] [--dry-run] [--json]` | Remove old index data and expired event logs |
+
+**Benchmarks** (`BENCHMARK.md`)
+
+| Command | What it does |
+|---|---|
+| `cw audit <ticket> [--json]` | One extra review of a ticket's final diff; kept out of its cost |
+| `cw benchmark <project> [--json]` | Cost, reviews per model, fix rounds and audit results per ticket |
 
 ## Develop
 

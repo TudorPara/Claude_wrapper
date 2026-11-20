@@ -10,6 +10,17 @@
   ],
   "agents": [
     {
+      "name": "context-sketcher",
+      "plugin": "core",
+      "description": "cw only. Sketches, from a change request alone, where in a codebase the change would probably land, so cw can search for the real code. Never reads files.",
+      "tools": [
+        "StructuredOutput"
+      ],
+      "model": "haiku",
+      "skills": [],
+      "path": "/Users/dev/cw/toolkit/plugins/core/agents/context-sketcher.md"
+    },
+    {
       "name": "onboarder",
       "plugin": "core",
       "description": "Read-only project onboarding. Maps an existing repository - stack, commands, architecture, tests - and compares its conventions with the team's stack rules. Use once when a project joins the toolkit.",
@@ -166,6 +177,8 @@
       "worker": "sonnet",
       "reviewer": "opus",
       "onboarder": "sonnet",
+      "reviewer_followup": "sonnet",
+      "context": "haiku",
       "reviewers": [
         "reviewer"
       ]

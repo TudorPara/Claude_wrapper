@@ -2,7 +2,10 @@
 
 import logging
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
+
+from pydantic import BaseModel
 
 from cw.errors import AppErrorCode, AppException
 
@@ -13,6 +16,30 @@ CONFLICT_FILTER = "--diff-filter=U"
 CONFLICT_MARKER = "^<<<<<<< "
 MERGES_ONLY = "--merges"
 PORCELAIN_PATH_COLUMN = 3
+BINARY_NUMSTAT = "-"
+NUL = "\0"
+BLOB_KIND = "blob"
+BATCH_HEADER_FIELDS = 3
+UNIT = "\x1f"
+RECORD = "\x1e"
+COMMIT_FIELDS = 4
+
+
+class TreeEntry(BaseModel):
+    """One file of a commit: its path, blob and size in bytes."""
+
+    path: str
+    blob: str
+    size: int
+
+
+class CommitInfo(BaseModel):
+    """A commit used as an evaluation sample."""
+
+    sha: str
+    parent: str
+    date: str
+    message: str
 
 
 def git(cwd: Path, *arguments: str, check: bool = True) -> str:
@@ -136,6 +163,16 @@ def changed_files(cwd: Path, old: str, new: str, *paths: str) -> list[str]:
     return git(cwd, "diff", "--name-only", "--relative", old, new, "--", *paths).splitlines()
 
 
+def changed_line_counts(cwd: Path, old: str, new: str) -> list[tuple[int | None, str]]:
+    """Return (lines added plus removed, path) for each file that differs; None counts a binary file."""
+    counts = []
+    for line in git(cwd, "diff", "--numstat", "--no-renames", "--relative", old, new).splitlines():
+        added, removed, path = line.split("\t", 2)
+        binary = BINARY_NUMSTAT in (added, removed)
+        counts.append((None if binary else int(added) + int(removed), path))
+    return counts
+
+
 def merge(cwd: Path, ref: str) -> bool:
     """Merge a ref; return False when it stopped on conflicts."""
     result = subprocess.run(["git", "merge", "--no-edit", ref], cwd=cwd, capture_output=True, text=True)
@@ -198,3 +235,62 @@ def last_commit_age(cwd: Path) -> str:
 def user_name(cwd: Path) -> str:
     """Return the configured git author name."""
     return git(cwd, "config", "user.name", check=False) or "unknown"
+
+
+def merge_base(cwd: Path, first: str, second: str) -> str:
+    """Return the best common ancestor of two commits."""
+    return git(cwd, "merge-base", first, second)
+
+
+def resolve_commit(cwd: Path, ref: str) -> str:
+    """Return the commit a ref points to, or an empty string when it does not exist."""
+    return git(cwd, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
+
+
+def tree_entries(cwd: Path, commit: str) -> list[TreeEntry]:
+    """Return the files of a commit under this folder, relative to it, with their blob and size."""
+    listing = git(cwd, "ls-tree", "-r", "-z", "-l", commit)
+    entries = []
+    for record in listing.split(NUL):
+        if not record:
+            continue
+        header, path = record.split("\t", 1)
+        _, kind, blob, size = header.split()
+        if kind == BLOB_KIND:
+            entries.append(TreeEntry(path=path, blob=blob, size=int(size)))
+    return entries
+
+
+def read_blobs(cwd: Path, blobs: list[str]) -> Iterator[tuple[str, bytes]]:
+    """Yield the content of each blob, read through one `git cat-file --batch` process."""
+    with subprocess.Popen(
+        ["git", "cat-file", "--batch"], cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE
+    ) as process:
+        for blob in blobs:
+            process.stdin.write(f"{blob}\n".encode())
+            process.stdin.flush()
+            header = process.stdout.readline().decode().split()
+            if len(header) < BATCH_HEADER_FIELDS:
+                continue
+            content = process.stdout.read(int(header[2]))
+            process.stdout.read(1)
+            yield blob, content
+        process.stdin.close()
+
+
+def recent_commits(cwd: Path, ref: str, count: int) -> list[CommitInfo]:
+    """Return the latest non-merge commits of a ref, newest first, with their first parent, date and message."""
+    output = git(cwd, "log", "--no-merges", f"-n{count}", f"--format=%H{UNIT}%P{UNIT}%aI{UNIT}%B{RECORD}", ref)
+    commits = []
+    for record in output.split(RECORD):
+        fields = record.strip().split(UNIT)
+        if len(fields) != COMMIT_FIELDS or not fields[1]:
+            continue
+        sha, parents, date, message = fields
+        commits.append(CommitInfo(sha=sha, parent=parents.split()[0], date=date, message=message.strip()))
+    return commits
+
+
+def exists_at(cwd: Path, commit: str, path: str) -> bool:
+    """Return whether a path (relative to this folder) exists in a commit."""
+    return subprocess.run(["git", "cat-file", "-e", f"{commit}:./{path}"], cwd=cwd, capture_output=True).returncode == 0

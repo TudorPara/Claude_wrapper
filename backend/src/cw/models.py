@@ -70,6 +70,21 @@ class Severity(StrEnum):
     MINOR = "minor"
 
 
+class CommentOutcomeKind(StrEnum):
+    """What a worker did with one pull request comment."""
+
+    FIXED = "fixed"
+    DECLINED = "declined"
+
+
+class CommentOutcome(BaseModel):
+    """A worker's answer to one pull request comment thread."""
+
+    thread_id: str = Field(description="The id in the comment's [thread ...] label.")
+    outcome: CommentOutcomeKind
+    reason: str = Field(description="For declined: why no change is needed, one or two lines. Otherwise empty.")
+
+
 class Subtask(BaseModel):
     """One step of a plan, done by one worker after the steps before it."""
 
@@ -137,7 +152,8 @@ class WorkerResult(BaseModel):
         default_factory=list,
         description="Usually empty. Only a lasting fact a future session in this repository needs and cannot see "
         "quickly in the code: a command to use, where a kind of code lives, a decision and why, a trap. One line "
-        "each, at most two. Not what you did (that is summary); cw adds them to the project's CLAUDE.md.",
+        "each, at most two. Not what you did (that is summary); cw keeps them with the ticket and shows them to later "
+        "tickets on a similar request.",
     )
     commit_message: str
     reason: str
@@ -145,6 +161,10 @@ class WorkerResult(BaseModel):
         default="",
         description="Only when fixing failing checks: what you tried, why it may still fail, what to try next. "
         "At most three lines. Otherwise empty.",
+    )
+    comment_outcomes: list[CommentOutcome] = Field(
+        default_factory=list,
+        description="Only when addressing pull request comments: one outcome per [thread ...] label. Otherwise empty.",
     )
 
 
@@ -157,6 +177,25 @@ class ReviewerResult(BaseModel):
         default_factory=list,
         description="Ids of the open findings in your prompt that the code now fixes. Empty when none were listed.",
     )
+
+
+class HydeSketch(BaseModel):
+    """The context engine's guess at the code a request will touch, used only to search."""
+
+    paths: list[str] = Field(description="Likely file paths, as they would look in this repository.")
+    symbols: list[str] = Field(description="Likely class, function and method names.")
+    code: str = Field(description="10 to 20 lines of plausible code for the change.")
+
+
+class AuditResult(BaseModel):
+    """A benchmark's extra review of a ticket's final diff, kept out of the ticket's runs and cost."""
+
+    at: datetime
+    model: str
+    blocking: int
+    minor: int
+    findings: list[ReviewComment]
+    cost_usd: float
 
 
 class Difference(BaseModel):
@@ -297,6 +336,13 @@ class Ticket(BaseModel):
     paused_step: Step | None = None
     error: str | None = None
     runs: list[RunUsage] = []
+    changed_files: list[str] = []
+    merge_commit: str = ""
+    context_seed: str = ""
+    context_seed_built: bool = False
+    seed_files: list[str] = []
+    pull_request_fix_rounds: int = 0
+    audit: AuditResult | None = None
 
 
 class TicketSummary(BaseModel):

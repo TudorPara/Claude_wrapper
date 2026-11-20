@@ -14,7 +14,7 @@ struct ProfileEditor: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             ForEach(AgentRole.allCases) { role in
-                let agent = store.toolkit?.agents.first { $0.name == role.rawValue }
+                let agent = store.toolkit?.agents.first { $0.name == role.agentName }
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(role.label).fontWeight(.semibold)
@@ -35,6 +35,21 @@ struct ProfileEditor: View {
                 }
                 Divider()
             }
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Follow-up reviews").fontWeight(.semibold)
+                    Text("Every review after a ticket's first: re-reviews, cw fix reviews, conflict reviews.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                let followup = Binding(
+                    get: { profile.models.reviewerFollowup ?? "sonnet" }, set: { profile.models.reviewerFollowup = $0 })
+                Picker("", selection: followup) {
+                    ForEach(Array(Set(availableModels + [followup.wrappedValue])).sorted(), id: \.self) { Text($0).tag($0) }
+                }
+                .frame(width: 130)
+            }
+            Divider()
             HStack {
                 Text("Reviewers")
                 TextField("reviewer", text: Binding(
@@ -64,6 +79,10 @@ struct ProfileEditor: View {
                 LabeledStepper(
                     title: "Agent time limit (minutes)", help: "An agent run that takes longer is stopped",
                     value: Binding(get: { profile.limits.agentTimeoutMinutes ?? 45 }, set: { profile.limits.agentTimeoutMinutes = $0 }), range: 1...240)
+                LabeledStepper(
+                    title: "Review skip (changed lines)",
+                    help: "A cw fix round that only answered comments, passes the checks and changed at most this many lines skips its review; 0 never skips",
+                    value: Binding(get: { profile.limits.reviewSkipMaxChangedLines ?? 20 }, set: { profile.limits.reviewSkipMaxChangedLines = $0 }), range: 0...200)
                 LabeledStepper(
                     title: "Check time limit (minutes)", help: "A lint or test command that takes longer counts as failed",
                     value: Binding(get: { profile.limits.checkTimeoutMinutes ?? 15 }, set: { profile.limits.checkTimeoutMinutes = $0 }), range: 1...120)

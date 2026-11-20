@@ -66,6 +66,7 @@ enum SheetRoute: Identifiable {
 @Observable
 final class Store {
     var config: CWConfig?
+    @ObservationIgnored private var rawConfig: Any?
     var configLoaded = false
     var projectsInfo: [ProjectInfo] = []
     var tickets: [TicketSummary] = []
@@ -157,9 +158,18 @@ final class Store {
         return try await cw.decode(T.self, arguments, decoder: decoder)
     }
 
+    private func loadData(_ arguments: [String], fixture: String) async throws -> Data {
+        if let fixtures {
+            return try Data(contentsOf: fixtures.appendingPathComponent(fixture))
+        }
+        return try await cw.output(arguments)
+    }
+
     func refreshConfig() async {
         do {
-            config = try await load(CWConfig.self, ["config", "--json"], fixture: "config.json")
+            let data = try await loadData(["config", "--json"], fixture: "config.json")
+            config = try JSONDecoder().decode(CWConfig.self, from: data)
+            rawConfig = try JSONSerialization.jsonObject(with: data)
             lastError = nil
         } catch {
             config = nil
@@ -235,9 +245,10 @@ final class Store {
 
     func save(_ newConfig: CWConfig) async {
         do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            _ = try await cw.output(["config", "set"], stdin: try encoder.encode(newConfig))
+            let edited = try JSONSerialization.jsonObject(with: JSONEncoder().encode(newConfig))
+            let merged = mergedConfig(rawConfig, edited)
+            let body = try JSONSerialization.data(withJSONObject: merged, options: [.prettyPrinted, .sortedKeys])
+            _ = try await cw.output(["config", "set"], stdin: body)
             lastError = nil
             await refreshConfig()
             await refreshToolkit()

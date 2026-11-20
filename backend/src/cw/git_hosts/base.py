@@ -7,6 +7,17 @@ from pydantic import BaseModel
 from cw.models import ReviewComment
 
 
+def finding_tag(finding_id: str) -> str:
+    """Return the label that marks a review finding in the text cw posts, so a thread can be matched to it."""
+    return f"[{finding_id}]"
+
+
+def finding_text(comment: ReviewComment) -> str:
+    """Return a review finding as cw posts it: severity, id label, body."""
+    tag = f"{finding_tag(comment.id)} " if comment.id else ""
+    return f"**{comment.severity}** {tag}{comment.body}"
+
+
 class PullRequest(BaseModel):
     """An opened pull request."""
 
@@ -21,6 +32,7 @@ class PullRequestThread(BaseModel):
     path: str
     line: int
     body: str
+    last_comment: str = ""
 
 
 class GitHost(Protocol):
@@ -50,6 +62,10 @@ class GitHost(Protocol):
         """Mark a comment thread resolved."""
         ...
 
-    def merge(self, number: int, branch: str, message: str, sha: str) -> None:
-        """Squash-merge the pull request only while its head is this commit, then delete its branch on the host."""
+    def reply_to_thread(self, number: int, thread_id: str, body: str) -> None:
+        """Add a reply to a comment thread, leaving it open."""
+        ...
+
+    def merge(self, number: int, branch: str, message: str, sha: str) -> str:
+        """Squash-merge only while the head is this commit, delete the branch; return the merge commit."""
         ...
